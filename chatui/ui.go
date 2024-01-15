@@ -21,8 +21,9 @@ type UI struct {
 func (ui *UI) ChatHandler(sock *socket.ChatSocket, prev *socket.ChatMessage) *UI {
 	select {
 	case msg := <-sock.Received:
-		if prev != nil && msg != *prev {
+		if prev == nil || msg != *prev {
 			fmt.Fprintf(ui.ChatView, "%s: %s\n", msg.Author.Username, msg.MessageRaw)
+			ui.ChatView.ScrollToEnd()
 		}
 		return ui.ChatHandler(sock, &msg)
 	}
@@ -66,8 +67,8 @@ func NewUI(sock *socket.ChatSocket) *UI {
 			}
 			msgBox.SetText("")
 		case tcell.KeyCtrlC:
+			sock.Conn.CloseNow()
 			app.Stop()
-			return
 		}
 	})
 	msgBox.SetLabel("Message: ")

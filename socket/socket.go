@@ -75,16 +75,19 @@ func NewSocket() *ChatSocket {
 }
 
 func (sock *ChatSocket) Connect() *ChatSocket {
+	if sock.Conn != nil {
+		sock.Conn.CloseNow()
+		sock.Conn = nil
+	}
+
 	client := http.Client{
 		Timeout: 0,
 	}
-
 	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
 		HTTPClient: &client,
 		HTTPHeader: getHeaders(),
 	})
 	if err != nil {
-		sock.Conn = nil
 		sock.ClientMsg("Failed to connect. Retrying...")
 		return sock.Connect()
 	}

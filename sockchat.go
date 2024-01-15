@@ -12,15 +12,15 @@ func main() {
 
 	log.Println("Opening socket...")
 	sock := socket.NewSocket().Connect()
-	defer sock.Conn.CloseNow()
 
 	ui := chatui.NewUI(sock)
 	if ui == nil {
 		log.Fatal("Could not init UI.")
 	}
 
-	go sock.Connect().Fetch()
 	go ui.ChatHandler(sock, nil)
+	go sock.Fetch()
 
+	defer sock.Conn.CloseNow()
 	ui.App.Run()
 }
