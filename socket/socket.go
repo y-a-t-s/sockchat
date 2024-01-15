@@ -15,7 +15,8 @@ import (
 type ChatSocket struct {
 	Conn     *websocket.Conn
 	Context  context.Context
-	Received chan *ChatMessage
+	Received chan ChatMessage
+	URL      *url.URL
 }
 
 func getHeaders() map[string][]string {
@@ -30,21 +31,26 @@ func getHeaders() map[string][]string {
 	return headers
 }
 
-func (sock *ChatSocket) Fetch() {
+func (sock *ChatSocket) Fetch() *ChatSocket {
+	if sock.Conn == nil {
+		return sock.Connect().Fetch()
+	}
+
 	for {
 		_, msg, err := sock.Conn.Read(sock.Context)
 		if err != nil {
-			log.Fatal("Failed to read from socket.")
+			sock.ClientMsg("Failed to read from socket.")
+			return sock.Connect().Fetch()
 		}
 
-		sockMsg := &SocketMessage{}
-		err = json.Unmarshal(msg, sockMsg)
+		sockMsg := SocketMessage{}
+		err = json.Unmarshal(msg, &sockMsg)
 		if err != nil {
 			log.Fatal("Failed to parse server response.")
 		}
 
 		for _, m := range sockMsg.Messages {
-			sock.Received <- &m
+			sock.Received <- m
 		}
 	}
 }
@@ -57,38 +63,43 @@ func NewSocket() *ChatSocket {
 	if err != nil {
 		log.Fatal("Failed to parse socket URL.")
 	}
-	client := &http.Client{
-		Timeout: 0,
-	}
-
-	conn, _, err := websocket.Dial(ctx, sockUrl.String(), &websocket.DialOptions{
-		HTTPClient: client,
-		HTTPHeader: getHeaders(),
-	})
-	if err != nil {
-		log.Fatal("Failed to connect.", err)
-	}
-
-	// Disable read size limit.
-	conn.SetReadLimit(-1)
 
 	sock := &ChatSocket{
-		Conn:     conn,
+		Conn:     nil,
 		Context:  ctx,
-		Received: make(chan *ChatMessage, 1024),
+		Received: make(chan ChatMessage, 1024),
+		URL:      sockUrl,
 	}
-	sock.ClientMsg("Connected.")
 
 	return sock
 }
 
 func (sock *ChatSocket) Connect() *ChatSocket {
+	client := http.Client{
+		Timeout: 0,
+	}
+
+	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
+		HTTPClient: &client,
+		HTTPHeader: getHeaders(),
+	})
+	if err != nil {
+		sock.Conn = nil
+		sock.ClientMsg("Failed to connect. Retrying...")
+		return sock.Connect()
+	}
+	sock.ClientMsg("Connected.\n")
+
+	// Disable read size limit.
+	conn.SetReadLimit(-1)
+
+	sock.Conn = conn
+	// Let caller defer close.
 
 	// Send join channel message. Raw bytes; not JSON encoded.
-	err := sock.Conn.Write(sock.Context, websocket.MessageText, []byte("/join 1"))
+	err = sock.Conn.Write(sock.Context, websocket.MessageText, []byte("/join 1"))
 	if err != nil {
-		log.Fatal("Failed to send join message.")
-		// return err
+		log.Panic("Failed to send join message.")
 	}
 
 	return sock

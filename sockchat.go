@@ -19,8 +19,8 @@ func main() {
 		log.Fatal("Could not init UI.")
 	}
 
-	go ui.ChatHandler(sock)
-	go sock.Fetch()
+	go sock.Connect().Fetch()
+	go ui.ChatHandler(sock, nil)
 
-	log.Fatal(ui.App.Run())
+	ui.App.Run()
 }

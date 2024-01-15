@@ -22,7 +22,7 @@ type SocketMessage struct {
 }
 
 func (sock *ChatSocket) ClientMsg(msg string) {
-	sock.Received <- &ChatMessage{
+	sock.Received <- ChatMessage{
 		Author: User{
 			ID:       0,
 			Username: "sockchat",

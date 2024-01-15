@@ -18,12 +18,13 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func (ui *UI) ChatHandler(sock *socket.ChatSocket) {
-	for {
-		select {
-		case msg := <-sock.Received:
+func (ui *UI) ChatHandler(sock *socket.ChatSocket, prev *socket.ChatMessage) *UI {
+	select {
+	case msg := <-sock.Received:
+		if prev != nil && msg != *prev {
 			fmt.Fprintf(ui.ChatView, "%s: %s\n", msg.Author.Username, msg.MessageRaw)
 		}
+		return ui.ChatHandler(sock, &msg)
 	}
 }
 
@@ -34,6 +35,7 @@ func NewUI(sock *socket.ChatSocket) *UI {
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetRegions(true).
+		SetScrollable(true).
 		SetChangedFunc(func() {
 			app.Draw()
 		}).
