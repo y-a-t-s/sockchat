@@ -1,0 +1,8 @@
+.DS_Store
+.env
+*.log
+tmp/
+
+GPATH
+GRTAGS
+GTAGS
