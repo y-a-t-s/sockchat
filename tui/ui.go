@@ -9,7 +9,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"nhooyr.io/websocket"
 )
 
 type UI struct {
@@ -17,6 +16,20 @@ type UI struct {
 	MainView *tview.Flex
 	ChatView *tview.TextView
 	InputBox *tview.InputField
+}
+
+func acHandler(sock *socket.ChatSocket, msg string, re *regexp.Regexp) string {
+	return string(re.ReplaceAllFunc([]byte(msg), func(m []byte) []byte {
+		id := string(m[1:])
+
+		sock.Users.UsersMutex.Lock()
+		if u, exists := sock.Users.UserMap[id]; exists {
+			m = []byte(fmt.Sprintf("@%s,", u))
+		}
+		sock.Users.UsersMutex.Unlock()
+
+		return m
+	}))
 }
 
 func InitUI(sock *socket.ChatSocket) *UI {
@@ -32,7 +45,7 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		})
 	chatView.SetBorder(false)
 
-	userRe := regexp.MustCompile(`@(\d+)`)
+	acRE := regexp.MustCompile(`@(\d+)`)
 	msgBox := tview.NewInputField().
 		SetFieldWidth(0).
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024))
@@ -45,24 +58,13 @@ func InitUI(sock *socket.ChatSocket) *UI {
 				return
 			}
 
-			err := sock.Conn.Write(sock.Context, websocket.MessageText, []byte(msg))
-			if err != nil {
-				sock.ClientMsg("Failed to send msg.")
-			}
+			// Add outgoing message to queue
+			sock.Channels.Outgoing <- msg
 			msgBox.SetText("")
+			go sock.Write()
 		case tcell.KeyTab:
-			msgBox.SetText(string(
-				userRe.ReplaceAllFunc([]byte(msgBox.GetText()), func(m []byte) []byte {
-					id := string(m[1:])
-
-					sock.Users.UsersMutex.Lock()
-					if u, exists := sock.Users.UserMap[id]; exists {
-						m = []byte(fmt.Sprintf("@%s,", u))
-					}
-					sock.Users.UsersMutex.Unlock()
-
-					return m
-				})))
+			msg := msgBox.GetText()
+			msgBox.SetText(acHandler(sock, msg, acRE))
 		case tcell.KeyCtrlC:
 			sock.Conn.CloseNow()
 			app.Stop()

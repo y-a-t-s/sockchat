@@ -22,8 +22,9 @@ type ChatSocket struct {
 }
 
 type MsgChannels struct {
-	Messages chan ChatMessage
-	Users    chan User
+	Messages chan ChatMessage // Incoming msg feed
+	Outgoing chan string      // Outgoing queue
+	Users    chan User        // Received user data
 }
 
 type UserTable struct {
@@ -54,8 +55,9 @@ func NewSocket() *ChatSocket {
 
 	return &ChatSocket{
 		Channels: MsgChannels{
-			make(chan ChatMessage, 1024),
-			make(chan User, 1024),
+			Messages: make(chan ChatMessage, 1024),
+			Outgoing: make(chan string, 32),
+			Users:    make(chan User, 1024),
 		},
 		Conn:    nil,
 		Context: ctx,
@@ -96,10 +98,8 @@ func (sock *ChatSocket) connect() *ChatSocket {
 	if room == "" {
 		log.Panic("SC_DEF_ROOM not defined. Check .env")
 	}
-	err = sock.Conn.Write(sock.Context, websocket.MessageText, []byte(fmt.Sprintf("/join %s", room)))
-	if err != nil {
-		log.Panic("Failed to send join message.")
-	}
+	sock.Channels.Outgoing <- fmt.Sprintf("/join %s", room)
+	sock.Write()
 
 	return sock
 }
@@ -132,14 +132,15 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 	}
 }
 
-func (sock *ChatSocket) Write(msg string) *ChatSocket {
+func (sock *ChatSocket) Write() *ChatSocket {
 	// Wait until socket has reconnected when needed.
 	for sock.Conn == nil {
 	}
 
+	msg := <-sock.Channels.Outgoing
 	err := sock.Conn.Write(sock.Context, websocket.MessageText, []byte(msg))
 	if err != nil {
-		sock.ClientMsg("Failed to send msg.")
+		sock.ClientMsg("Failed to send: " + msg)
 	}
 
 	return sock
