@@ -1,4 +1,4 @@
-package chat
+package socket
 
 type User struct {
 	ID        uint32 `json:"id"`
@@ -22,7 +22,7 @@ type SocketMessage struct {
 }
 
 func (sock *ChatSocket) ClientMsg(msg string) {
-	sock.Received <- ChatMessage{
+	sock.Channels.Messages <- ChatMessage{
 		Author: User{
 			ID:       0,
 			Username: "sockchat",

@@ -1,4 +1,4 @@
-package chat
+package socket
 
 import (
 	"context"
@@ -14,13 +14,20 @@ import (
 )
 
 type ChatSocket struct {
+	Channels MsgChannels
 	Conn     *websocket.Conn
 	Context  context.Context
-	Received chan ChatMessage
-	URL      *url.URL
+	URL      url.URL
+	Users    UserTable
+}
 
-	// TODO: Move to parent Chat struct.
-	Users      map[string]string
+type MsgChannels struct {
+	Messages chan ChatMessage
+	Users    chan User
+}
+
+type UserTable struct {
+	UserMap    map[string]string
 	UsersMutex sync.Mutex
 }
 
@@ -46,50 +53,26 @@ func NewSocket() *ChatSocket {
 	}
 
 	return &ChatSocket{
-		Conn:     nil,
-		Context:  ctx,
-		Received: make(chan ChatMessage, 1024),
-		URL:      sockUrl,
-		Users:    make(map[string]string),
+		Channels: MsgChannels{
+			make(chan ChatMessage, 1024),
+			make(chan User, 1024),
+		},
+		Conn:    nil,
+		Context: ctx,
+		URL:     *sockUrl,
+		Users: UserTable{
+			UserMap: make(map[string]string),
+		},
 	}
 }
 
-func (sock *ChatSocket) Fetch() *ChatSocket {
-	if sock.Conn == nil {
-		return sock.Connect().Fetch()
-	}
-
-	for {
-		_, msg, err := sock.Conn.Read(sock.Context)
-		if err != nil {
-			sock.ClientMsg("Failed to read from socket.")
-			return sock.Connect().Fetch()
-		}
-
-		sockMsg := SocketMessage{}
-		err = json.Unmarshal(msg, &sockMsg)
-		if err != nil {
-			log.Fatal("Failed to parse server response.", err)
-		}
-
-		for _, m := range sockMsg.Messages {
-			sock.Received <- m
-		}
-
-		for _, u := range sockMsg.Users {
-			sock.UsersMutex.Lock()
-			sock.Users[fmt.Sprint(u.ID)] = u.Username
-			sock.UsersMutex.Unlock()
-		}
-	}
-}
-
-func (sock *ChatSocket) Connect() *ChatSocket {
+func (sock *ChatSocket) connect() *ChatSocket {
 	if sock.Conn != nil {
 		sock.Conn.CloseNow()
 		sock.Conn = nil
 	}
 
+	sock.ClientMsg("Opening socket...")
 	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
 		HTTPClient: &http.Client{
 			Timeout: 0,
@@ -97,8 +80,8 @@ func (sock *ChatSocket) Connect() *ChatSocket {
 		HTTPHeader: getHeaders(),
 	})
 	if err != nil {
-		sock.ClientMsg("\nFailed to connect. Retrying...")
-		return sock.Connect()
+		sock.ClientMsg("Failed to connect. Retrying...")
+		return sock.connect()
 	}
 	sock.ClientMsg("Connected.\n")
 
@@ -108,7 +91,7 @@ func (sock *ChatSocket) Connect() *ChatSocket {
 	sock.Conn = conn
 	// Let caller defer close.
 
-	// Send join channel message. Raw bytes; not JSON encoded.
+	// Send join channel message. Raw bytes; not JSON encoded. Joins default room set in .env
 	room := os.Getenv("SC_DEF_ROOM")
 	if room == "" {
 		log.Panic("SC_DEF_ROOM not defined. Check .env")
@@ -116,6 +99,47 @@ func (sock *ChatSocket) Connect() *ChatSocket {
 	err = sock.Conn.Write(sock.Context, websocket.MessageText, []byte(fmt.Sprintf("/join %s", room)))
 	if err != nil {
 		log.Panic("Failed to send join message.")
+	}
+
+	return sock
+}
+
+func (sock *ChatSocket) Fetch() *ChatSocket {
+	if sock.Conn == nil {
+		return sock.connect().Fetch()
+	}
+
+	for {
+		_, msg, err := sock.Conn.Read(sock.Context)
+		if err != nil {
+			sock.ClientMsg("Failed to read from socket.\n")
+			return sock.connect().Fetch()
+		}
+
+		// TODO: Decoder streams
+		sockMsg := SocketMessage{}
+		err = json.Unmarshal(msg, &sockMsg)
+		if err != nil {
+			log.Fatal("Failed to parse server response.", err)
+		}
+
+		for _, m := range sockMsg.Messages {
+			sock.Channels.Messages <- m
+		}
+		for _, u := range sockMsg.Users {
+			sock.Channels.Users <- u
+		}
+	}
+}
+
+func (sock *ChatSocket) Write(msg string) *ChatSocket {
+	// Wait until socket has reconnected when needed.
+	for sock.Conn == nil {
+	}
+
+	err := sock.Conn.Write(sock.Context, websocket.MessageText, []byte(msg))
+	if err != nil {
+		sock.ClientMsg("Failed to send msg.")
 	}
 
 	return sock

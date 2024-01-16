@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"y-a-t-s/sockchat/chat"
+	"y-a-t-s/sockchat/socket"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -19,18 +19,7 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func (ui *UI) ChatHandler(sock *chat.ChatSocket, prev *chat.ChatMessage) *UI {
-	select {
-	case msg := <-sock.Received:
-		if prev == nil || msg != *prev {
-			fmt.Fprintf(ui.ChatView, "%s (#%d): %s\n", msg.Author.Username, msg.Author.ID, msg.MessageRaw)
-			ui.ChatView.ScrollToEnd()
-		}
-		return ui.ChatHandler(sock, &msg)
-	}
-}
-
-func NewUI(sock *chat.ChatSocket) *UI {
+func InitUI(sock *socket.ChatSocket) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -40,13 +29,6 @@ func NewUI(sock *chat.ChatSocket) *UI {
 		SetScrollable(true).
 		SetChangedFunc(func() {
 			app.Draw()
-		}).
-		SetDoneFunc(func(key tcell.Key) {
-			switch key {
-			case tcell.KeyCtrlC:
-				app.Stop()
-				return
-			}
 		})
 	chatView.SetBorder(false)
 
@@ -72,9 +54,12 @@ func NewUI(sock *chat.ChatSocket) *UI {
 			msgBox.SetText(string(
 				userRe.ReplaceAllFunc([]byte(msgBox.GetText()), func(m []byte) []byte {
 					id := string(m[1:])
-					if u, exists := sock.Users[id]; exists {
-						return []byte(fmt.Sprintf("@%s,", u))
+
+					sock.Users.UsersMutex.Lock()
+					if u, exists := sock.Users.UserMap[id]; exists {
+						m = []byte(fmt.Sprintf("@%s,", u))
 					}
+					sock.Users.UsersMutex.Unlock()
 
 					return m
 				})))
@@ -89,5 +74,6 @@ func NewUI(sock *chat.ChatSocket) *UI {
 	flex.AddItem(msgBox, 1, 1, false)
 
 	app.SetRoot(flex, true).SetFocus(msgBox)
+
 	return &UI{app, flex, chatView, msgBox}
 }
