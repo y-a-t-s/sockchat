@@ -1,10 +1,11 @@
-package chatui
+package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
-	"y-a-t-s/sockchat/socket"
+	"y-a-t-s/sockchat/chat"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -18,18 +19,18 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func (ui *UI) ChatHandler(sock *socket.ChatSocket, prev *socket.ChatMessage) *UI {
+func (ui *UI) ChatHandler(sock *chat.ChatSocket, prev *chat.ChatMessage) *UI {
 	select {
 	case msg := <-sock.Received:
 		if prev == nil || msg != *prev {
-			fmt.Fprintf(ui.ChatView, "%s: %s\n", msg.Author.Username, msg.MessageRaw)
+			fmt.Fprintf(ui.ChatView, "%s (#%d): %s\n", msg.Author.Username, msg.Author.ID, msg.MessageRaw)
 			ui.ChatView.ScrollToEnd()
 		}
 		return ui.ChatHandler(sock, &msg)
 	}
 }
 
-func NewUI(sock *socket.ChatSocket) *UI {
+func NewUI(sock *chat.ChatSocket) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -49,6 +50,7 @@ func NewUI(sock *socket.ChatSocket) *UI {
 		})
 	chatView.SetBorder(false)
 
+	userRe := regexp.MustCompile(`@(\d+)`)
 	msgBox := tview.NewInputField().
 		SetFieldWidth(0).
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024))
@@ -66,6 +68,16 @@ func NewUI(sock *socket.ChatSocket) *UI {
 				sock.ClientMsg("Failed to send msg.")
 			}
 			msgBox.SetText("")
+		case tcell.KeyTab:
+			msgBox.SetText(string(
+				userRe.ReplaceAllFunc([]byte(msgBox.GetText()), func(m []byte) []byte {
+					id := string(m[1:])
+					if u, exists := sock.Users[id]; exists {
+						return []byte(fmt.Sprintf("@%s,", u))
+					}
+
+					return m
+				})))
 		case tcell.KeyCtrlC:
 			sock.Conn.CloseNow()
 			app.Stop()

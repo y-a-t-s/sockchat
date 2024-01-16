@@ -3,17 +3,20 @@ package main
 import (
 	"log"
 
-	"y-a-t-s/sockchat/chatui"
-	"y-a-t-s/sockchat/socket"
+	"y-a-t-s/sockchat/chat"
+	"y-a-t-s/sockchat/tui"
 )
 
 func main() {
-	loadEnv()
+	err := loadEnv()
+	if err != nil {
+		log.Fatal("Could not process .env", err)
+	}
 
 	log.Println("Opening socket...")
-	sock := socket.NewSocket().Connect()
+	sock := chat.NewSocket().Connect()
 
-	ui := chatui.NewUI(sock)
+	ui := tui.NewUI(sock)
 	if ui == nil {
 		log.Fatal("Could not init UI.")
 	}

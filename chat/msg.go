@@ -1,4 +1,4 @@
-package socket
+package chat
 
 type User struct {
 	ID        uint32 `json:"id"`
@@ -18,7 +18,7 @@ type ChatMessage struct {
 
 type SocketMessage struct {
 	Messages []ChatMessage   `json:"messages"`
-	Users    map[uint32]User `json:"users"`
+	Users    map[string]User `json:"users"`
 }
 
 func (sock *ChatSocket) ClientMsg(msg string) {

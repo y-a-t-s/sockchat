@@ -1,4 +1,4 @@
-package socket
+package chat
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 
 	"nhooyr.io/websocket"
 )
@@ -17,6 +18,10 @@ type ChatSocket struct {
 	Context  context.Context
 	Received chan ChatMessage
 	URL      *url.URL
+
+	// TODO: Move to parent Chat struct.
+	Users      map[string]string
+	UsersMutex sync.Mutex
 }
 
 func getHeaders() map[string][]string {
@@ -29,6 +34,24 @@ func getHeaders() map[string][]string {
 	headers["User-Agent"] = []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"}
 
 	return headers
+}
+
+func NewSocket() *ChatSocket {
+	ctx := context.Background()
+	host, port := os.Getenv("SC_HOST"), os.Getenv("SC_PORT")
+
+	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
+	if err != nil {
+		log.Fatal("Failed to parse socket URL.")
+	}
+
+	return &ChatSocket{
+		Conn:     nil,
+		Context:  ctx,
+		Received: make(chan ChatMessage, 1024),
+		URL:      sockUrl,
+		Users:    make(map[string]string),
+	}
 }
 
 func (sock *ChatSocket) Fetch() *ChatSocket {
@@ -46,32 +69,19 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 		sockMsg := SocketMessage{}
 		err = json.Unmarshal(msg, &sockMsg)
 		if err != nil {
-			log.Fatal("Failed to parse server response.")
+			log.Fatal("Failed to parse server response.", err)
 		}
 
 		for _, m := range sockMsg.Messages {
 			sock.Received <- m
 		}
+
+		for _, u := range sockMsg.Users {
+			sock.UsersMutex.Lock()
+			sock.Users[fmt.Sprint(u.ID)] = u.Username
+			sock.UsersMutex.Unlock()
+		}
 	}
-}
-
-func NewSocket() *ChatSocket {
-	ctx := context.Background()
-	host, port := os.Getenv("SC_HOST"), os.Getenv("SC_PORT")
-
-	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
-	if err != nil {
-		log.Fatal("Failed to parse socket URL.")
-	}
-
-	sock := &ChatSocket{
-		Conn:     nil,
-		Context:  ctx,
-		Received: make(chan ChatMessage, 1024),
-		URL:      sockUrl,
-	}
-
-	return sock
 }
 
 func (sock *ChatSocket) Connect() *ChatSocket {
@@ -80,15 +90,14 @@ func (sock *ChatSocket) Connect() *ChatSocket {
 		sock.Conn = nil
 	}
 
-	client := http.Client{
-		Timeout: 0,
-	}
 	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
-		HTTPClient: &client,
+		HTTPClient: &http.Client{
+			Timeout: 0,
+		},
 		HTTPHeader: getHeaders(),
 	})
 	if err != nil {
-		sock.ClientMsg("Failed to connect. Retrying...")
+		sock.ClientMsg("\nFailed to connect. Retrying...")
 		return sock.Connect()
 	}
 	sock.ClientMsg("Connected.\n")
@@ -100,7 +109,11 @@ func (sock *ChatSocket) Connect() *ChatSocket {
 	// Let caller defer close.
 
 	// Send join channel message. Raw bytes; not JSON encoded.
-	err = sock.Conn.Write(sock.Context, websocket.MessageText, []byte("/join 1"))
+	room := os.Getenv("SC_DEF_ROOM")
+	if room == "" {
+		log.Panic("SC_DEF_ROOM not defined. Check .env")
+	}
+	err = sock.Conn.Write(sock.Context, websocket.MessageText, []byte(fmt.Sprintf("/join %s", room)))
 	if err != nil {
 		log.Panic("Failed to send join message.")
 	}
