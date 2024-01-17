@@ -113,6 +113,8 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 		_, msg, err := sock.Conn.Read(sock.Context)
 		if err != nil {
 			sock.ClientMsg("Failed to read from socket.\n")
+			sock.Conn.CloseNow()
+			sock.Conn = nil
 			return sock.connect().Fetch()
 		}
 
