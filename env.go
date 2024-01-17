@@ -14,18 +14,25 @@ func newEnv(envMap map[string]string) {
 }
 
 func checkEnv(envMap map[string]string) error {
-	f, err := os.Open(".env")
+	f, err := os.OpenFile(".env", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
+	modified := false
 	for k, v := range envMap {
 		_, exists := os.LookupEnv(k)
 		if !exists {
+			modified = true
 			log.Printf("Adding %s to .env", k)
 			fmt.Fprintf(f, "%s=\"%s\"", k, v)
 		}
+	}
+
+	// Reload .env now that it's updated.
+	if modified {
+		return loadEnv()
 	}
 
 	return nil
