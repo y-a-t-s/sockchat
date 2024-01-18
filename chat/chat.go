@@ -30,15 +30,23 @@ func InitChat() *Chat {
 	}
 }
 
+func (c *Chat) FetchMessages() *Chat {
+	go c.msgHandler(nil)
+	go c.userHandler()
+	go c.Socket.Fetch()
+
+	return c
+}
+
 func (c *Chat) userHandler() *Chat {
 	for {
 		user := <-c.Socket.Channels.Users
 		id := fmt.Sprint(user.ID)
 
 		// Just to be safe.
-		c.Socket.Users.UsersMutex.Lock()
+		c.Socket.Users.Mutex.Lock()
 		c.Socket.Users.UserMap[id] = user.Username
-		c.Socket.Users.UsersMutex.Unlock()
+		c.Socket.Users.Mutex.Unlock()
 	}
 }
 
@@ -52,12 +60,4 @@ func (c *Chat) msgHandler(prev *socket.ChatMessage) *Chat {
 	// Socket reads sometimes return messages we fetched previously.
 	// A simple recursive comparison with the previous printed message handles it well enough.
 	return c.msgHandler(&msg)
-}
-
-func (c *Chat) FetchMessages() *Chat {
-	go c.msgHandler(nil)
-	go c.userHandler()
-	go c.Socket.Fetch()
-
-	return c
 }

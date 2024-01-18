@@ -2,7 +2,6 @@ package socket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,14 +21,15 @@ type ChatSocket struct {
 }
 
 type MsgChannels struct {
-	Messages chan ChatMessage // Incoming msg feed
-	Outgoing chan string      // Outgoing queue
-	Users    chan User        // Received user data
+	Messages       chan ChatMessage // Incoming msg feed
+	Outgoing       chan string      // Outgoing queue
+	serverResponse chan []byte      // Server response data
+	Users          chan User        // Received user data
 }
 
 type UserTable struct {
-	UserMap    map[string]string
-	UsersMutex sync.Mutex
+	UserMap map[string]string
+	Mutex   sync.Mutex
 }
 
 func getHeaders() map[string][]string {
@@ -53,11 +53,12 @@ func NewSocket() *ChatSocket {
 		log.Fatal("Failed to parse socket URL.")
 	}
 
-	return &ChatSocket{
+	sock := &ChatSocket{
 		Channels: MsgChannels{
-			Messages: make(chan ChatMessage, 1024),
-			Outgoing: make(chan string, 32),
-			Users:    make(chan User, 1024),
+			Messages:       make(chan ChatMessage, 1024),
+			Outgoing:       make(chan string, 32),
+			serverResponse: make(chan []byte, 256),
+			Users:          make(chan User, 1024),
 		},
 		Conn:    nil,
 		Context: ctx,
@@ -66,6 +67,11 @@ func NewSocket() *ChatSocket {
 			UserMap: make(map[string]string),
 		},
 	}
+
+	// Start up response handler.
+	go sock.responseHandler()
+
+	return sock
 }
 
 func (sock *ChatSocket) connect() *ChatSocket {
@@ -76,6 +82,7 @@ func (sock *ChatSocket) connect() *ChatSocket {
 
 	sock.ClientMsg("Opening socket...")
 	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
+		CompressionMode: websocket.CompressionContextTakeover,
 		HTTPClient: &http.Client{
 			Timeout: 0,
 		},
@@ -95,6 +102,7 @@ func (sock *ChatSocket) connect() *ChatSocket {
 
 	// Send join channel message. Raw bytes; not JSON encoded. Joins default room set in .env
 	room := os.Getenv("SC_DEF_ROOM")
+	// Missing env var returns empty string
 	if room == "" {
 		log.Panic("SC_DEF_ROOM not defined. Check .env")
 	}
@@ -118,19 +126,7 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 			return sock.connect().Fetch()
 		}
 
-		// TODO: Decoder streams
-		sockMsg := SocketMessage{}
-		err = json.Unmarshal(msg, &sockMsg)
-		if err != nil {
-			log.Fatal("Failed to parse server response.", err)
-		}
-
-		for _, m := range sockMsg.Messages {
-			sock.Channels.Messages <- m
-		}
-		for _, u := range sockMsg.Users {
-			sock.Channels.Users <- u
-		}
+		sock.Channels.serverResponse <- msg
 	}
 }
 

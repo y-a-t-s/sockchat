@@ -22,12 +22,11 @@ func acHandler(sock *socket.ChatSocket, msg string, re *regexp.Regexp) string {
 	return string(re.ReplaceAllFunc([]byte(msg), func(m []byte) []byte {
 		id := string(m[1:])
 
-		sock.Users.UsersMutex.Lock()
-		if u, exists := sock.Users.UserMap[id]; exists {
-			m = []byte(fmt.Sprintf("@%s,", u))
+		if u := sock.GetUsername(id); u != nil {
+			m = []byte(fmt.Sprintf("@%s", *u))
 		}
-		sock.Users.UsersMutex.Unlock()
 
+		// If the user data was not found for id, return the original match.
 		return m
 	}))
 }
@@ -39,10 +38,10 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetRegions(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			app.Draw()
-		})
+		SetScrollable(true)
+	chatView.SetChangedFunc(func() {
+		app.Draw()
+	})
 	chatView.SetBorder(false)
 
 	acRE := regexp.MustCompile(`@(\d+)`)

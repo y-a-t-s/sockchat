@@ -1,15 +1,11 @@
 package socket
 
-import "fmt"
-
-type User struct {
-	ID        uint32 `json:"id"`
-	Username  string `json:"username"`
-	AvatarURL string `json:"avatar_url"`
-
-	// TODO: Hex colors with random bytes.
-	// Color     [3]byte
-}
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+)
 
 type ChatMessage struct {
 	Author          User   `json:"author"`
@@ -21,9 +17,77 @@ type ChatMessage struct {
 	RoomID          uint16 `json:"room_id"`
 }
 
+type User struct {
+	ID        uint32 `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url"`
+
+	// TODO: Hex colors with random bytes.
+	// Color     [3]byte
+}
+
 type SocketMessage struct {
-	Messages []ChatMessage   `json:"messages"`
-	Users    map[string]User `json:"users"`
+	// Using json.RawMessage to delay parsing these parts.
+	Messages json.RawMessage `json:"messages"`
+	Users    json.RawMessage `json:"users"`
+}
+
+func (sock *ChatSocket) GetUsername(id string) *string {
+	sock.Users.Mutex.Lock()
+	if u, exists := sock.Users.UserMap[id]; exists {
+		return &u
+	}
+	sock.Users.Mutex.Unlock()
+
+	return nil
+}
+
+func (sock *ChatSocket) responseHandler() {
+	for {
+		msg := <-sock.Channels.serverResponse
+		if len(msg) == 0 {
+			continue
+		}
+
+		var sm SocketMessage
+		if err := json.Unmarshal(msg, &sm); err != nil {
+			sock.ClientMsg(
+				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
+					string(msg),
+					err))
+		}
+
+		if len(sm.Messages) != 0 {
+			jd := json.NewDecoder(bytes.NewReader(sm.Messages))
+			if _, err := jd.Token(); err != nil {
+				log.Fatal(err)
+			}
+
+			for jd.More() {
+				var msg ChatMessage
+				if err := jd.Decode(&msg); err != nil {
+					sock.ClientMsg(fmt.Sprintf("Failed to parse chat message from server: %v", err))
+					continue
+				}
+
+				sock.Channels.Messages <- msg
+				// Send author data from msg to user handler to prioritize processing relevant users
+				sock.Channels.Users <- msg.Author
+			}
+		}
+		if len(sm.Users) != 0 {
+			jd := json.NewDecoder(bytes.NewReader(sm.Users))
+			for jd.More() {
+				var u User
+				if err := jd.Decode(&u); err != nil {
+					sock.ClientMsg(fmt.Sprintf("Failed to parse user data from server: %v", err))
+					continue
+				}
+
+				sock.Channels.Users <- u
+			}
+		}
+	}
 }
 
 func (u *User) GetUserString() string {
