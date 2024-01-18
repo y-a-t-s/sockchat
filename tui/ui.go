@@ -38,10 +38,10 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetRegions(true).
-		SetScrollable(true)
-	chatView.SetChangedFunc(func() {
-		app.Draw()
-	})
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			app.Draw()
+		})
 	chatView.SetBorder(false)
 
 	acRE := regexp.MustCompile(`@(\d+)`)

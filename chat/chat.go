@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"html"
 
 	"y-a-t-s/sockchat/socket"
 	"y-a-t-s/sockchat/tui"
@@ -53,7 +54,7 @@ func (c *Chat) userHandler() *Chat {
 func (c *Chat) msgHandler(prev *socket.ChatMessage) *Chat {
 	msg := <-c.Socket.Channels.Messages
 	if prev == nil || msg != *prev {
-		fmt.Fprintf(c.UI.ChatView, "%s %s\n", msg.Author.GetUserString(), msg.MessageRaw)
+		fmt.Fprintf(c.UI.ChatView, "%s %s\n", msg.Author.GetUserString(), html.UnescapeString(msg.MessageRaw))
 		c.UI.ChatView.ScrollToEnd()
 	}
 
