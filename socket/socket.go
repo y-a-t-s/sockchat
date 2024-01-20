@@ -108,10 +108,6 @@ func (sock *ChatSocket) connect() *ChatSocket {
 
 	sock.ClientMsg("Connected.\n")
 
-	// Set timeout for read and write to 15 mins
-	t := time.Now()
-	conn.SetDeadline(t.Add(time.Minute * 15))
-
 	sock.Conn = conn
 	// Let caller defer close.
 
@@ -128,6 +124,10 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 	}
 
 	for {
+		// Set timeout for read and write to 15 mins from now.
+		t := time.Now()
+		sock.Conn.SetDeadline(t.Add(time.Minute * 15))
+
 		msg := (&bytes.Buffer{}).Bytes()
 		err := websocket.Message.Receive(sock.Conn, &msg)
 		if err != nil {
