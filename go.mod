@@ -6,7 +6,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/rivo/tview v0.0.0-20240115061330-ed5968603a5f
-	nhooyr.io/websocket v1.8.10
+	golang.org/x/net v0.6.0
 )
 
 require (

@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"regexp"
-	"strings"
 
 	"y-a-t-s/sockchat/socket"
 
@@ -18,7 +17,7 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func acHandler(sock *socket.ChatSocket, msg string, re *regexp.Regexp) string {
+func tabHandler(sock *socket.ChatSocket, msg string, re *regexp.Regexp) string {
 	return string(re.ReplaceAllFunc([]byte(msg), func(m []byte) []byte {
 		id := string(m[1:])
 
@@ -44,7 +43,7 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		})
 	chatView.SetBorder(false)
 
-	acRE := regexp.MustCompile(`@(\d+)`)
+	tabRE := regexp.MustCompile(`@(\d+)`)
 	msgBox := tview.NewInputField().
 		SetFieldWidth(0).
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024))
@@ -52,10 +51,6 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		switch key {
 		case tcell.KeyEnter:
 			msg := msgBox.GetText()
-			strings.TrimSpace(msg)
-			if len(msg) == 0 {
-				return
-			}
 
 			// Add outgoing message to queue
 			sock.Channels.Outgoing <- msg
@@ -63,9 +58,9 @@ func InitUI(sock *socket.ChatSocket) *UI {
 			go sock.Write()
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
-			msgBox.SetText(acHandler(sock, msg, acRE))
+			msgBox.SetText(tabHandler(sock, msg, tabRE))
 		case tcell.KeyCtrlC:
-			sock.Conn.CloseNow()
+			sock.Conn.Close()
 			app.Stop()
 		}
 	})

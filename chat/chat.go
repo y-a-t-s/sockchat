@@ -21,7 +21,7 @@ func InitChat() *Chat {
 
 	ui := tui.InitUI(sock)
 	if ui == nil {
-		sock.Conn.CloseNow()
+		sock.Conn.Close()
 		return nil
 	}
 

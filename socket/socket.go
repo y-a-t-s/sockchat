@@ -1,21 +1,23 @@
 package socket
 
 import (
-	"context"
+	"bytes"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 
-	"nhooyr.io/websocket"
+	"golang.org/x/net/websocket"
 )
 
 type ChatSocket struct {
 	Channels MsgChannels
 	Conn     *websocket.Conn
-	Context  context.Context
+	Room     string
 	URL      url.URL
 	Users    UserTable
 }
@@ -33,24 +35,24 @@ type UserTable struct {
 }
 
 func getHeaders() map[string][]string {
-	host, port := os.Getenv("SC_HOST"), os.Getenv("SC_PORT")
-
 	headers := make(map[string][]string)
 	headers["Cookie"] = []string{os.Args[1]}
-	headers["Host"] = []string{fmt.Sprintf("%s:%s", host, port)}
-	headers["Origin"] = []string{fmt.Sprintf("https://%s", host)}
 	headers["User-Agent"] = []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"}
 
 	return headers
 }
 
 func NewSocket() *ChatSocket {
-	ctx := context.Background()
-	host, port := os.Getenv("SC_HOST"), os.Getenv("SC_PORT")
+	host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
 
 	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
 	if err != nil {
 		log.Fatal("Failed to parse socket URL.")
+	}
+
+	room := os.Getenv("SC_DEF_ROOM")
+	if room == "" {
+		log.Panic("SC_DEF_ROOM not defined. Check .env")
 	}
 
 	sock := &ChatSocket{
@@ -60,9 +62,9 @@ func NewSocket() *ChatSocket {
 			serverResponse: make(chan []byte, 256),
 			Users:          make(chan User, 1024),
 		},
-		Conn:    nil,
-		Context: ctx,
-		URL:     *sockUrl,
+		Conn: nil,
+		Room: room,
+		URL:  *sockUrl,
 		Users: UserTable{
 			UserMap: make(map[string]string),
 		},
@@ -76,37 +78,45 @@ func NewSocket() *ChatSocket {
 
 func (sock *ChatSocket) connect() *ChatSocket {
 	if sock.Conn != nil {
-		sock.Conn.CloseNow()
+		sock.Conn.Close()
 		sock.Conn = nil
 	}
 
+	host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
+
+	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
+	if err != nil {
+		log.Fatal("Failed to parse socket URL.")
+	}
+	originUrl, err := url.Parse(fmt.Sprintf("https://%s", host))
+	if err != nil {
+		log.Fatal("Failed to parse origin URL.")
+	}
+
 	sock.ClientMsg("Opening socket...")
-	conn, _, err := websocket.Dial(sock.Context, sock.URL.String(), &websocket.DialOptions{
-		CompressionMode: websocket.CompressionContextTakeover,
-		HTTPClient: &http.Client{
-			Timeout: 0,
-		},
-		HTTPHeader: getHeaders(),
-	})
+	cfg, err := websocket.NewConfig(sockUrl.String(), originUrl.String())
+	if err != nil {
+		log.Fatal("Failed to create config for WebSocket connection.\n", err)
+	}
+	cfg.Header = getHeaders()
+
+	conn, err := websocket.DialConfig(cfg)
 	if err != nil {
 		sock.ClientMsg("Failed to connect. Retrying...")
 		return sock.connect()
 	}
+
 	sock.ClientMsg("Connected.\n")
 
-	// Disable read size limit.
-	conn.SetReadLimit(-1)
+	// Set timeout for read and write to 15 mins
+	t := time.Now()
+	conn.SetDeadline(t.Add(time.Minute * 15))
 
 	sock.Conn = conn
 	// Let caller defer close.
 
-	// Send join channel message. Raw bytes; not JSON encoded. Joins default room set in .env
-	room := os.Getenv("SC_DEF_ROOM")
-	// Missing env var returns empty string
-	if room == "" {
-		log.Panic("SC_DEF_ROOM not defined. Check .env")
-	}
-	sock.Channels.Outgoing <- fmt.Sprintf("/join %s", room)
+	// Send /join message for desired room.
+	sock.Channels.Outgoing <- fmt.Sprintf("/join %s", sock.Room)
 	sock.Write()
 
 	return sock
@@ -118,10 +128,14 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 	}
 
 	for {
-		_, msg, err := sock.Conn.Read(sock.Context)
+		msg := (&bytes.Buffer{}).Bytes()
+		err := websocket.Message.Receive(sock.Conn, &msg)
 		if err != nil {
+			log.Fatal(err)
 			sock.ClientMsg("Failed to read from socket.\n")
-			sock.Conn.CloseNow()
+			if sock.Conn != nil {
+				sock.Conn.Close()
+			}
 			sock.Conn = nil
 			return sock.connect().Fetch()
 		}
@@ -136,8 +150,21 @@ func (sock *ChatSocket) Write() *ChatSocket {
 	}
 
 	msg := <-sock.Channels.Outgoing
-	err := sock.Conn.Write(sock.Context, websocket.MessageText, []byte(msg))
-	if err != nil {
+
+	// Trim unnecessary whitespace.
+	strings.TrimSpace(msg)
+	// Ignore empty messages.
+	if len(msg) == 0 {
+		return sock
+	}
+
+	if regexp.MustCompile(`^/join \d+$`).MatchString(msg) {
+		// Update room ID with each join message.
+		// Important for reconnecting to same channel if dropped.
+		sock.Room = strings.Split(msg, " ")[1]
+	}
+
+	if _, err := sock.Conn.Write([]byte(msg)); err != nil {
 		sock.ClientMsg("Failed to send: " + msg)
 	}
 
