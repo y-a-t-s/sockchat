@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 	"html"
+	"regexp"
 
 	"y-a-t-s/sockchat/socket"
 	"y-a-t-s/sockchat/tui"
@@ -39,22 +40,27 @@ func (c *Chat) FetchMessages() *Chat {
 	return c
 }
 
-func (c *Chat) userHandler() *Chat {
+func (c *Chat) userHandler() {
+	userMap := make(map[string]string)
 	for {
-		user := <-c.Socket.Channels.Users
-		id := fmt.Sprint(user.ID)
-
-		// Just to be safe.
-		c.Socket.Users.Mutex.Lock()
-		c.Socket.Users.UserMap[id] = user.Username
-		c.Socket.Users.Mutex.Unlock()
+		select {
+		case user := <-c.Socket.Channels.Users:
+			userMap[fmt.Sprint(user.ID)] = user.Username
+		case query := <-c.Socket.Channels.UserQuery:
+			query.Username <- userMap[query.ID]
+		}
 	}
+}
+
+func escapeTags(msg string) string {
+	return regexp.MustCompile(`\[(.+?)\]`).ReplaceAllString(msg, "[$1[]")
 }
 
 func (c *Chat) msgHandler(prev *socket.ChatMessage) *Chat {
 	msg := <-c.Socket.Channels.Messages
 	if prev == nil || msg != *prev {
-		fmt.Fprintf(c.UI.ChatView, "%s %s\n", msg.Author.GetUserString(), html.UnescapeString(msg.MessageRaw))
+		un := escapeTags(html.UnescapeString(msg.MessageRaw))
+		fmt.Fprintf(c.UI.ChatView, "%s %s\n", msg.Author.GetUserString(), un)
 		c.UI.ChatView.ScrollToEnd()
 	}
 

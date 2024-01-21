@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"y-a-t-s/sockchat/socket"
 
@@ -17,17 +18,16 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func tabHandler(sock *socket.ChatSocket, msg string, re *regexp.Regexp) string {
-	return string(re.ReplaceAllFunc([]byte(msg), func(m []byte) []byte {
-		id := string(m[1:])
+func tabHandler(sock *socket.ChatSocket, msg string) string {
+	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
+		id := m[1:]
 
-		if u := sock.GetUsername(id); u != nil {
-			m = []byte(fmt.Sprintf("@%s", *u))
+		if u := sock.GetUsername(id); u != id {
+			return fmt.Sprintf("@%s,", u)
 		}
 
-		// If the user data was not found for id, return the original match.
-		return m
-	}))
+		return fmt.Sprintf("@%s", id)
+	})
 }
 
 func InitUI(sock *socket.ChatSocket) *UI {
@@ -43,7 +43,6 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		})
 	chatView.SetBorder(false)
 
-	tabRE := regexp.MustCompile(`@(\d+)`)
 	msgBox := tview.NewInputField().
 		SetFieldWidth(0).
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024))
@@ -51,14 +50,17 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		switch key {
 		case tcell.KeyEnter:
 			msg := msgBox.GetText()
+			msg = strings.TrimSpace(msg)
 
-			// Add outgoing message to queue
-			sock.Channels.Outgoing <- msg
+			if !sock.ChatDebug(msg) {
+				// Add outgoing message to queue
+				sock.Channels.Outgoing <- msg
+				go sock.Write()
+			}
 			msgBox.SetText("")
-			go sock.Write()
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
-			msgBox.SetText(tabHandler(sock, msg, tabRE))
+			msgBox.SetText(tabHandler(sock, msg))
 		case tcell.KeyCtrlC:
 			sock.Conn.Close()
 			app.Stop()

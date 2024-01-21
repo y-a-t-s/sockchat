@@ -8,7 +8,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -19,7 +18,11 @@ type ChatSocket struct {
 	Conn     *websocket.Conn
 	Room     string
 	URL      url.URL
-	Users    UserTable
+}
+
+type UserQuery struct {
+	ID       string
+	Username chan string
 }
 
 type MsgChannels struct {
@@ -27,11 +30,7 @@ type MsgChannels struct {
 	Outgoing       chan string      // Outgoing queue
 	serverResponse chan []byte      // Server response data
 	Users          chan User        // Received user data
-}
-
-type UserTable struct {
-	UserMap map[string]string
-	Mutex   sync.Mutex
+	UserQuery      chan UserQuery
 }
 
 func getHeaders() map[string][]string {
@@ -61,13 +60,11 @@ func NewSocket() *ChatSocket {
 			Outgoing:       make(chan string, 32),
 			serverResponse: make(chan []byte, 256),
 			Users:          make(chan User, 1024),
+			UserQuery:      make(chan UserQuery, 128),
 		},
 		Conn: nil,
 		Room: room,
 		URL:  *sockUrl,
-		Users: UserTable{
-			UserMap: make(map[string]string),
-		},
 	}
 
 	// Start up response handler.
