@@ -28,11 +28,6 @@ type MsgChannels struct {
 	UserQuery      chan UserQuery
 }
 
-type UserQuery struct {
-	ID       string
-	Username chan string
-}
-
 func getHeaders() map[string][]string {
 	headers := make(map[string][]string)
 	headers["Cookie"] = []string{os.Args[1]}
@@ -41,7 +36,19 @@ func getHeaders() map[string][]string {
 	return headers
 }
 
-func NewSocket() *ChatSocket {
+func Init() *ChatSocket {
+	sock := newSocket()
+
+	go sock.fetch()
+	go sock.write()
+
+	go sock.responseHandler()
+	go sock.UserHandler()
+
+	return sock
+}
+
+func newSocket() *ChatSocket {
 	host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
 
 	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
@@ -66,9 +73,6 @@ func NewSocket() *ChatSocket {
 		Room: []byte(room),
 		URL:  *sockUrl,
 	}
-
-	// Start up response handler.
-	go sock.responseHandler()
 
 	return sock
 }
@@ -114,9 +118,9 @@ func (sock *ChatSocket) connect() *ChatSocket {
 	return sock
 }
 
-func (sock *ChatSocket) Fetch() *ChatSocket {
+func (sock *ChatSocket) fetch() *ChatSocket {
 	if sock.Conn == nil {
-		return sock.connect().Fetch()
+		return sock.connect().fetch()
 	}
 
 	for {
@@ -132,14 +136,14 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 				sock.Conn.Close()
 				sock.Conn = nil
 			}
-			return sock.connect().Fetch()
+			return sock.connect().fetch()
 		}
 
 		sock.Channels.serverResponse <- msg
 	}
 }
 
-func (sock *ChatSocket) Write() *ChatSocket {
+func (sock *ChatSocket) write() {
 	for {
 		msg := <-sock.Channels.Outgoing
 
@@ -147,7 +151,7 @@ func (sock *ChatSocket) Write() *ChatSocket {
 		msg = bytes.TrimSpace(msg)
 		// Ignore empty messages.
 		if len(msg) == 0 {
-			return sock
+			continue
 		}
 
 		if regexp.MustCompile(`^/join \d+$`).Match(msg) {

@@ -1,6 +1,6 @@
 # SockChat
 
-A KF chat client. Still a bit rough around the edges, but it works.
+A KF chat client.
 
 ## Usage
 
@@ -26,6 +26,6 @@ If the connection fails, confirm the URL in your `.env` file is up-to-date.
 
 Donations are always welcome but never expected nor required:
 
-XMR: 8BjCARiV2uB2gZTbbiMUetfRxcAYZgVM5fXxjEbpmb2nAu8ND1grazZ1EhMGdRqVerAtvEJeiy7SzA3SLXpg2CtRDtCAFfn
+XMR: `8BjCARiV2uB2gZTbbiMUetfRxcAYZgVM5fXxjEbpmb2nAu8ND1grazZ1EhMGdRqVerAtvEJeiy7SzA3SLXpg2CtRDtCAFfn`
 
 [Other crypto](https://trocador.app/anonpay/?ticker_to=xmr&network_to=Mainnet&address=8BjCARiV2uB2gZTbbiMUetfRxcAYZgVM5fXxjEbpmb2nAu8ND1grazZ1EhMGdRqVerAtvEJeiy7SzA3SLXpg2CtRDtCAFfn&donation=True&description=SockChat+Donation&bgcolor=) ([Tor version](http://trocadorfyhlu27aefre5u7zri66gudtzdyelymftvr4yjwcxhfaqsid.onion/anonpay/?ticker_to=xmr&network_to=Mainnet&address=8BjCARiV2uB2gZTbbiMUetfRxcAYZgVM5fXxjEbpmb2nAu8ND1grazZ1EhMGdRqVerAtvEJeiy7SzA3SLXpg2CtRDtCAFfn&donation=True&description=SockChat+Donation&bgcolor=))
