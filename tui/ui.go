@@ -17,7 +17,6 @@ type UI struct {
 	App      *tview.Application
 	MainView *tview.Flex
 	ChatView *tview.TextView
-	TimeBox  *tview.TextView
 	InputBox *tview.InputField
 }
 
@@ -33,22 +32,12 @@ func tabHandler(sock *socket.ChatSocket, msg string) string {
 	})
 }
 
-func (ui *UI) printEmptyLine() {
-	fmt.Fprintln(ui.ChatView)
-	fmt.Fprintln(ui.TimeBox)
-
-	ui.ChatView.ScrollToEnd()
-	ui.TimeBox.ScrollToEnd()
-}
-
 func (ui *UI) incomingHandler(sock *socket.ChatSocket) {
 	var prev *socket.ChatMessage
 	for {
 		msg := <-sock.Channels.Messages
 		if prev == nil || msg != *prev {
 			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
-			nnl := strings.TrimSuffix(unEsc, "\n")
-			fmt.Fprintf(ui.ChatView, "%s %s\n", msg.Author.GetUserString(), nnl)
 			h, m, s := func() (int, int, int) {
 				if msg.Author.ID == 0 {
 					return time.Now().Clock()
@@ -56,14 +45,10 @@ func (ui *UI) incomingHandler(sock *socket.ChatSocket) {
 				}
 				return time.Unix(int64(msg.MessageDate), 0).Clock()
 			}()
-			fmt.Fprintf(ui.TimeBox, "[%s::u]%0.2d:%0.2d:%0.2d[-::U]\n", msg.Author.GetColor(), h, m, s)
-
-			if len(nnl) < len(unEsc) {
-				ui.printEmptyLine()
-			}
+			fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
+			fmt.Fprintf(ui.ChatView, "%s %s\n", msg.Author.GetUserString(), unEsc)
 
 			ui.ChatView.ScrollToEnd()
-			ui.TimeBox.ScrollToEnd()
 		}
 
 		prev = &msg
@@ -86,17 +71,6 @@ func InitUI(sock *socket.ChatSocket) *UI {
 			app.Draw()
 		})
 	chatView.SetBorder(false)
-
-	inner := tview.NewFlex().SetDirection(tview.FlexColumn)
-
-	timeBox := tview.NewTextView().
-		SetDynamicColors(true).
-		SetRegions(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			app.Draw()
-		})
-	timeBox.SetBorder(false)
 
 	msgBox := tview.NewInputField().
 		SetFieldWidth(0).
@@ -121,15 +95,12 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	})
 	msgBox.SetLabel("Message: ")
 
-	inner.AddItem(chatView, 0, 1, false)
-	inner.AddItem(timeBox, 8, 1, false)
-
-	flex.AddItem(inner, 0, 1, false)
+	flex.AddItem(chatView, 0, 1, false)
 	flex.AddItem(msgBox, 1, 1, false)
 
 	app.SetRoot(flex, true).SetFocus(msgBox)
 
-	ui := &UI{app, flex, chatView, timeBox, msgBox}
+	ui := &UI{app, flex, chatView, msgBox}
 	go ui.incomingHandler(sock)
 
 	return ui

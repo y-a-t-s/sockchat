@@ -42,6 +42,7 @@ func (u *User) GetColor() string {
 }
 
 func (u *User) GetUserString() string {
+	color := u.GetColor()
 	// This is kinda ugly, so I'll explain:
 	// [%s::u] is a UI style tag for the color and enabling underlining.
 	// [-] clears the set color to print the ID (the %d value).
@@ -49,7 +50,7 @@ func (u *User) GetUserString() string {
 	// [-::U] resets the color like before, while also disabling underlining to print the message.
 	//
 	// See https://github.com/rivo/tview/blob/master/doc.go for more info on style tags.
-	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", u.GetColor(), u.Username, u.ID, color)
+	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, u.Username, u.ID, color)
 }
 
 func (sock *ChatSocket) UserHandler() {
