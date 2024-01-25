@@ -36,6 +36,7 @@ func (c *Chat) FetchMessages() *Chat {
 	go c.msgHandler(nil)
 	go c.userHandler()
 	go c.Socket.Fetch()
+	go c.Socket.Write()
 
 	return c
 }

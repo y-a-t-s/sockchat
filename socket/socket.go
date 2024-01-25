@@ -16,21 +16,21 @@ import (
 type ChatSocket struct {
 	Channels MsgChannels
 	Conn     *websocket.Conn
-	Room     string
+	Room     []byte
 	URL      url.URL
+}
+
+type MsgChannels struct {
+	Messages       chan ChatMessage // Incoming msg feed
+	Outgoing       chan []byte      // Outgoing queue
+	serverResponse chan []byte      // Server response data
+	Users          chan User        // Received user data
+	UserQuery      chan UserQuery
 }
 
 type UserQuery struct {
 	ID       string
 	Username chan string
-}
-
-type MsgChannels struct {
-	Messages       chan ChatMessage // Incoming msg feed
-	Outgoing       chan string      // Outgoing queue
-	serverResponse chan []byte      // Server response data
-	Users          chan User        // Received user data
-	UserQuery      chan UserQuery
 }
 
 func getHeaders() map[string][]string {
@@ -57,13 +57,13 @@ func NewSocket() *ChatSocket {
 	sock := &ChatSocket{
 		Channels: MsgChannels{
 			Messages:       make(chan ChatMessage, 1024),
-			Outgoing:       make(chan string, 32),
+			Outgoing:       make(chan []byte, 32),
 			serverResponse: make(chan []byte, 256),
 			Users:          make(chan User, 1024),
 			UserQuery:      make(chan UserQuery, 128),
 		},
 		Conn: nil,
-		Room: room,
+		Room: []byte(room),
 		URL:  *sockUrl,
 	}
 
@@ -109,8 +109,7 @@ func (sock *ChatSocket) connect() *ChatSocket {
 	// Let caller defer close.
 
 	// Send /join message for desired room.
-	sock.Channels.Outgoing <- fmt.Sprintf("/join %s", sock.Room)
-	sock.Write()
+	sock.Channels.Outgoing <- []byte(fmt.Sprintf("/join %s", sock.Room))
 
 	return sock
 }
@@ -128,12 +127,11 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 		msg := (&bytes.Buffer{}).Bytes()
 		err := websocket.Message.Receive(sock.Conn, &msg)
 		if err != nil {
-			log.Fatal(err)
 			sock.ClientMsg("Failed to read from socket.\n")
 			if sock.Conn != nil {
 				sock.Conn.Close()
+				sock.Conn = nil
 			}
-			sock.Conn = nil
 			return sock.connect().Fetch()
 		}
 
@@ -142,28 +140,24 @@ func (sock *ChatSocket) Fetch() *ChatSocket {
 }
 
 func (sock *ChatSocket) Write() *ChatSocket {
-	// Wait until socket has reconnected when needed.
-	for sock.Conn == nil {
+	for {
+		msg := <-sock.Channels.Outgoing
+
+		// Trim unnecessary whitespace.
+		msg = bytes.TrimSpace(msg)
+		// Ignore empty messages.
+		if len(msg) == 0 {
+			return sock
+		}
+
+		if regexp.MustCompile(`^/join \d+$`).Match(msg) {
+			// Update room ID with each join message.
+			// Important for reconnecting to same channel if dropped.
+			sock.Room = bytes.Split(msg, []byte(" "))[1]
+		}
+
+		if _, err := sock.Conn.Write(msg); err != nil {
+			sock.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
+		}
 	}
-
-	msg := <-sock.Channels.Outgoing
-
-	// Trim unnecessary whitespace.
-	strings.TrimSpace(msg)
-	// Ignore empty messages.
-	if len(msg) == 0 {
-		return sock
-	}
-
-	if regexp.MustCompile(`^/join \d+$`).MatchString(msg) {
-		// Update room ID with each join message.
-		// Important for reconnecting to same channel if dropped.
-		sock.Room = strings.Split(msg, " ")[1]
-	}
-
-	if _, err := sock.Conn.Write([]byte(msg)); err != nil {
-		sock.ClientMsg("Failed to send: " + msg)
-	}
-
-	return sock
 }

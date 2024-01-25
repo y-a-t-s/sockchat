@@ -49,13 +49,11 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	msgBox.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			msg := msgBox.GetText()
-			msg = strings.TrimSpace(msg)
+			msg := strings.TrimSpace(msgBox.GetText())
 
 			if !sock.ChatDebug(msg) {
 				// Add outgoing message to queue
-				sock.Channels.Outgoing <- msg
-				go sock.Write()
+				sock.Channels.Outgoing <- []byte(msg)
 			}
 			msgBox.SetText("")
 		case tcell.KeyTab:

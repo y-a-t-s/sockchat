@@ -85,6 +85,12 @@ func (sock *ChatSocket) responseHandler() {
 			continue
 		}
 
+		// Error messages from the server usually aren't encoded.
+		if !json.Valid(msg) {
+			sock.ClientMsg(string(msg))
+			continue
+		}
+
 		var sm SocketMessage
 		if err := json.Unmarshal(msg, &sm); err != nil {
 			sock.ClientMsg(
@@ -102,13 +108,14 @@ func (sock *ChatSocket) responseHandler() {
 			for jd.More() {
 				var msg ChatMessage
 				if err := jd.Decode(&msg); err != nil {
-					sock.ClientMsg(fmt.Sprintf("Failed to parse chat message from server: %v", err))
-					continue
+					sock.ClientMsg(
+						fmt.Sprintf("Failed to parse message from server.\nError: %v",
+							err))
+				} else {
+					sock.Channels.Messages <- msg
+					// Send user data from msg to user handler to prioritize active users
+					sock.Channels.Users <- msg.Author
 				}
-
-				sock.Channels.Messages <- msg
-				// Send author data from msg to user handler to prioritize processing relevant users
-				sock.Channels.Users <- msg.Author
 			}
 		}
 		if len(sm.Users) != 0 {
@@ -116,11 +123,12 @@ func (sock *ChatSocket) responseHandler() {
 			for jd.More() {
 				var u User
 				if err := jd.Decode(&u); err != nil {
-					sock.ClientMsg(fmt.Sprintf("Failed to parse user data from server: %v", err))
-					continue
+					sock.ClientMsg(
+						fmt.Sprintf("Failed to parse user data from server: %v",
+							err))
+				} else {
+					sock.Channels.Users <- u
 				}
-
-				sock.Channels.Users <- u
 			}
 		}
 	}
@@ -137,7 +145,7 @@ func (u *User) GetUserString() string {
 	// [%s::u] is a UI style tag for the color and enabling underlining.
 	// [-] clears the set color to print the ID (the %d value).
 	// [%s] sets the color back to the user's color to print the remaining "):".
-	// [-::U] resets the color like before, while also disabling underlining to print the actual message.
+	// [-::U] resets the color like before, while also disabling underlining to print the message.
 	//
 	// See https://github.com/rivo/tview/blob/master/doc.go for more info on style tags.
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, u.Username, u.ID, color)
