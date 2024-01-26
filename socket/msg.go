@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 type ChatMessage struct {
@@ -13,12 +14,12 @@ type ChatMessage struct {
 	Message         string `json:"message"`
 	MessageRaw      string `json:"message_raw"`
 	MessageID       uint32 `json:"message_id"`
-	MessageDate     uint64 `json:"message_date"`
-	MessageEditDate uint64 `json:"message_edit_date"`
+	MessageDate     int64  `json:"message_date"`
+	MessageEditDate int64  `json:"message_edit_date"`
 	RoomID          uint16 `json:"room_id"`
 }
 
-type SocketMessage struct {
+type ServerMessage struct {
 	// Using json.RawMessage to delay parsing these parts.
 	Messages json.RawMessage `json:"messages"`
 	Users    json.RawMessage `json:"users"`
@@ -50,14 +51,15 @@ func (sock *ChatSocket) ClientMsg(msg string) {
 			ID:       0,
 			Username: "sockchat",
 		},
-		MessageRaw: msg,
+		MessageDate: time.Now().Unix(),
+		MessageRaw:  msg,
 	}
 
 	sock.Channels.Messages <- cm
 }
 
 func (sock *ChatSocket) responseHandler() {
-	defer sock.Conn.Close()
+	defer sock.TryClose()
 
 	for {
 		msg := <-sock.Channels.serverResponse
@@ -71,7 +73,7 @@ func (sock *ChatSocket) responseHandler() {
 			continue
 		}
 
-		var sm SocketMessage
+		var sm ServerMessage
 		if err := json.Unmarshal(msg, &sm); err != nil {
 			sock.ClientMsg(
 				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
@@ -79,7 +81,7 @@ func (sock *ChatSocket) responseHandler() {
 					err))
 		}
 
-		if len(sm.Messages) != 0 {
+		if len(sm.Messages) > 0 {
 			jd := json.NewDecoder(bytes.NewReader(sm.Messages))
 			if _, err := jd.Token(); err != nil {
 				log.Fatal(err)
@@ -98,7 +100,7 @@ func (sock *ChatSocket) responseHandler() {
 				}
 			}
 		}
-		if len(sm.Users) != 0 {
+		if len(sm.Users) > 0 {
 			jd := json.NewDecoder(bytes.NewReader(sm.Users))
 			for jd.More() {
 				var u User

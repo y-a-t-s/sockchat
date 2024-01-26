@@ -20,51 +20,13 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func tabHandler(sock *socket.ChatSocket, msg string) string {
-	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
-		id := m[1:]
-
-		if u := sock.GetUsername(id); u != id {
-			return fmt.Sprintf("@%s,", u)
-		}
-
-		return fmt.Sprintf("@%s", id)
-	})
-}
-
-func (ui *UI) incomingHandler(sock *socket.ChatSocket) {
-	var prev *socket.ChatMessage
-	for {
-		msg := <-sock.Channels.Messages
-		if prev == nil || msg != *prev {
-			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
-			h, m, s := func() (int, int, int) {
-				if msg.Author.ID == 0 {
-					return time.Now().Clock()
-
-				}
-				return time.Unix(int64(msg.MessageDate), 0).Clock()
-			}()
-			fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
-			fmt.Fprintf(ui.ChatView, "%s %s\n", msg.Author.GetUserString(), unEsc)
-
-			ui.ChatView.ScrollToEnd()
-		}
-
-		prev = &msg
-	}
-}
-
-func escapeTags(msg string) string {
-	return regexp.MustCompile(`\[(.+?)\]`).ReplaceAllString(msg, "[$1[]")
-}
-
 func InitUI(sock *socket.ChatSocket) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
+		SetMaxLines(2048).
 		SetRegions(true).
 		SetScrollable(true).
 		SetChangedFunc(func() {
@@ -79,7 +41,6 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		switch key {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(msgBox.GetText())
-
 			if !sock.ChatDebug(msg) {
 				// Add outgoing message to queue
 				sock.Channels.Outgoing <- []byte(msg)
@@ -89,7 +50,7 @@ func InitUI(sock *socket.ChatSocket) *UI {
 			msg := msgBox.GetText()
 			msgBox.SetText(tabHandler(sock, msg))
 		case tcell.KeyCtrlC:
-			sock.Conn.Close()
+			sock.TryClose()
 			app.Stop()
 		}
 	})
@@ -104,4 +65,41 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	go ui.incomingHandler(sock)
 
 	return ui
+}
+
+func tabHandler(sock *socket.ChatSocket, msg string) string {
+	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
+		id := m[1:]
+		if u := sock.GetUsername(id); u != id {
+			return fmt.Sprintf("@%s,", u)
+		}
+
+		return m
+	})
+}
+
+func (ui *UI) incomingHandler(sock *socket.ChatSocket) {
+	tagRE := regexp.MustCompile(`\[(.+?)\]`)
+	escapeTags := func(msg string) string {
+		return tagRE.ReplaceAllString(msg, "[$1[]")
+	}
+
+	var prev *socket.ChatMessage
+	for {
+		msg := <-sock.Channels.Messages
+		if prev == nil || msg != *prev {
+			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
+
+			h, m, s := time.Unix(msg.MessageDate, 0).Clock()
+			// Print timestamp with user's color.
+			fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
+
+			// Print chat message, preceded by the sender's username and ID.
+			fmt.Fprintf(ui.ChatView, "[\"%d\"]%s %s[\"\"]\n", msg.Author.ID, msg.Author.GetUserString(), unEsc)
+
+			ui.ChatView.ScrollToEnd()
+		}
+
+		prev = &msg
+	}
 }

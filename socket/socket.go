@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 type ChatSocket struct {
 	Channels MsgChannels
-	Conn     *websocket.Conn
-	Room     []byte
-	URL      url.URL
+	conn     *websocket.Conn
+	room     []byte
+	url      url.URL
 }
 
 type MsgChannels struct {
@@ -49,12 +49,17 @@ func Init() *ChatSocket {
 }
 
 func newSocket() *ChatSocket {
-	host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
+	su := func() *url.URL {
+		host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
+		// Assemble url to chat.ws with appropriate domain and port.
+		// Note: os.Getenv returns the port as a string, so no %d in the format string.
+		su, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
+		if err != nil {
+			log.Fatal("Failed to parse socket URL.\n", err)
+		}
 
-	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
-	if err != nil {
-		log.Fatal("Failed to parse socket URL.")
-	}
+		return su
+	}()
 
 	room := os.Getenv("SC_DEF_ROOM")
 	if room == "" {
@@ -69,74 +74,69 @@ func newSocket() *ChatSocket {
 			Users:          make(chan User, 1024),
 			UserQuery:      make(chan UserQuery, 128),
 		},
-		Conn: nil,
-		Room: []byte(room),
-		URL:  *sockUrl,
+		conn: nil,
+		room: []byte(room),
+		url:  *su,
 	}
 
 	return sock
 }
 
+func (sock *ChatSocket) TryClose() bool {
+	if sock.conn == nil {
+		return false
+	}
+
+	sock.conn.Close()
+	sock.conn = nil
+
+	return true
+}
+
 func (sock *ChatSocket) connect() *ChatSocket {
-	if sock.Conn != nil {
-		sock.Conn.Close()
-		sock.Conn = nil
-	}
-
-	host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
-
-	sockUrl, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
-	if err != nil {
-		log.Fatal("Failed to parse socket URL.")
-	}
-	originUrl, err := url.Parse(fmt.Sprintf("https://%s", host))
-	if err != nil {
-		log.Fatal("Failed to parse origin URL.")
-	}
+	// Close before re-opening if needed.
+	sock.TryClose()
 
 	sock.ClientMsg("Opening socket...")
-	cfg, err := websocket.NewConfig(sockUrl.String(), originUrl.String())
-	if err != nil {
-		log.Fatal("Failed to create config for WebSocket connection.\n", err)
-	}
-	cfg.Header = getHeaders()
+	dialer := func() websocket.Dialer {
+		// Set handshake timeout to 15 mins.
+		timeout, err := time.ParseDuration("15m")
+		if err != nil {
+			log.Panic("Failed to parse timeout duration string.\n", err)
+		}
 
-	conn, err := websocket.DialConfig(cfg)
+		return websocket.Dialer{
+			EnableCompression: true,
+			HandshakeTimeout:  timeout,
+		}
+	}()
+
+	conn, _, err := dialer.Dial(sock.url.String(), getHeaders())
 	if err != nil {
 		sock.ClientMsg("Failed to connect. Retrying...")
 		return sock.connect()
 	}
-
 	sock.ClientMsg("Connected.\n")
 
-	sock.Conn = conn
+	sock.conn = conn
 	// Let caller defer close.
 
 	// Send /join message for desired room.
-	sock.Channels.Outgoing <- []byte(fmt.Sprintf("/join %s", sock.Room))
+	sock.Channels.Outgoing <- []byte(fmt.Sprintf("/join %s", sock.room))
 
 	return sock
 }
 
 func (sock *ChatSocket) fetch() *ChatSocket {
-	if sock.Conn == nil {
-		return sock.connect().fetch()
-	}
-
 	for {
-		// Set timeout for read and write to 15 mins from now.
-		t := time.Now()
-		sock.Conn.SetDeadline(t.Add(time.Minute * 15))
+		if sock.conn == nil {
+			sock.connect()
+		}
 
-		msg := (&bytes.Buffer{}).Bytes()
-		err := websocket.Message.Receive(sock.Conn, &msg)
+		_, msg, err := sock.conn.ReadMessage()
 		if err != nil {
 			sock.ClientMsg("Failed to read from socket.\n")
-			if sock.Conn != nil {
-				sock.Conn.Close()
-				sock.Conn = nil
-			}
-			return sock.connect().fetch()
+			sock.connect()
 		}
 
 		sock.Channels.serverResponse <- msg
@@ -144,9 +144,10 @@ func (sock *ChatSocket) fetch() *ChatSocket {
 }
 
 func (sock *ChatSocket) write() {
+	joinRE := regexp.MustCompile(`^/join \d+`)
+
 	for {
 		msg := <-sock.Channels.Outgoing
-
 		// Trim unnecessary whitespace.
 		msg = bytes.TrimSpace(msg)
 		// Ignore empty messages.
@@ -154,13 +155,11 @@ func (sock *ChatSocket) write() {
 			continue
 		}
 
-		if regexp.MustCompile(`^/join \d+$`).Match(msg) {
-			// Update room ID with each join message.
-			// Important for reconnecting to same channel if dropped.
-			sock.Room = bytes.Split(msg, []byte(" "))[1]
+		if joinRE.Match(msg) {
+			sock.room = bytes.Split(msg, []byte(" "))[1]
 		}
 
-		if _, err := sock.Conn.Write(msg); err != nil {
+		if err := sock.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			sock.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
 		}
 	}
