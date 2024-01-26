@@ -60,6 +60,9 @@ func (sock *ChatSocket) ClientMsg(msg string) {
 
 func (sock *ChatSocket) responseHandler() {
 	defer sock.TryClose()
+	if sock.tor != nil {
+		defer sock.tor.Close()
+	}
 
 	for {
 		msg := <-sock.Channels.serverResponse
