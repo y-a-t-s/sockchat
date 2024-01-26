@@ -3,6 +3,8 @@
 *.log
 tmp/
 
+data-dir-*/
+
 GPATH
 GRTAGS
 GTAGS

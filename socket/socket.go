@@ -2,6 +2,7 @@ package socket
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cretz/bine/tor"
 	"github.com/gorilla/websocket"
 )
 
@@ -17,6 +19,7 @@ type ChatSocket struct {
 	Channels MsgChannels
 	conn     *websocket.Conn
 	room     []byte
+	tor      *tor.Tor
 	url      url.URL
 }
 
@@ -38,6 +41,7 @@ func getHeaders() map[string][]string {
 
 func Init() *ChatSocket {
 	sock := newSocket()
+	sock.connect()
 
 	go sock.fetch()
 	go sock.write()
@@ -76,6 +80,7 @@ func newSocket() *ChatSocket {
 		},
 		conn: nil,
 		room: []byte(room),
+		tor:  nil,
 		url:  *su,
 	}
 
@@ -97,6 +102,24 @@ func (sock *ChatSocket) connect() *ChatSocket {
 	// Close before re-opening if needed.
 	sock.TryClose()
 
+	getTorDialer := func() tor.Dialer {
+		if sock.tor == nil {
+			log.Print("Starting tor...")
+			t, err := tor.Start(nil, nil)
+			if err != nil {
+				log.Fatal(err)
+			}
+			sock.tor = t
+		}
+
+		td, err := sock.tor.Dialer(context.Background(), nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		return *td
+	}
+
 	sock.ClientMsg("Opening socket...")
 	dialer := func() websocket.Dialer {
 		// Set handshake timeout to 15 mins.
@@ -105,10 +128,18 @@ func (sock *ChatSocket) connect() *ChatSocket {
 			log.Panic("Failed to parse timeout duration string.\n", err)
 		}
 
-		return websocket.Dialer{
+		wd := websocket.Dialer{
 			EnableCompression: true,
 			HandshakeTimeout:  timeout,
 		}
+
+		host := strings.TrimRight(os.Getenv("SC_HOST"), "/")
+		if strings.HasSuffix(host, ".onion") {
+			td := getTorDialer()
+			wd.NetDialContext = td.DialContext
+		}
+
+		return wd
 	}()
 
 	conn, _, err := dialer.Dial(sock.url.String(), getHeaders())
@@ -147,9 +178,8 @@ func (sock *ChatSocket) write() {
 	joinRE := regexp.MustCompile(`^/join \d+`)
 
 	for {
-		msg := <-sock.Channels.Outgoing
 		// Trim unnecessary whitespace.
-		msg = bytes.TrimSpace(msg)
+		msg := bytes.TrimSpace(<-sock.Channels.Outgoing)
 		// Ignore empty messages.
 		if len(msg) == 0 {
 			continue
