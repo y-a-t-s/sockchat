@@ -133,8 +133,8 @@ func (sock *ChatSocket) connect() *ChatSocket {
 			HandshakeTimeout:  timeout,
 		}
 
-		host := strings.TrimRight(os.Getenv("SC_HOST"), "/")
-		if strings.HasSuffix(host, ".onion") {
+		host := sock.url.Hostname()
+		if os.Getenv("SC_USE_TOR") == "1" || strings.HasSuffix(host, ".onion") {
 			td := getTorDialer()
 			wd.NetDialContext = td.DialContext
 		}

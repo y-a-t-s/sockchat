@@ -41,9 +41,11 @@ func checkEnv(envMap map[string]string) error {
 func loadEnv() error {
 	envMap := make(map[string]string)
 	envMap["SC_DEF_ROOM"] = "1"
-	// Ideally .net should be here, but the redirect doesn't always work.
-	envMap["SC_HOST"] = "kiwifarms.hk"
+	envMap["SC_HOST"] = "kiwifarms.net"
 	envMap["SC_PORT"] = "9443"
+	// If SC_HOST is a .onion domain, this is ignored.
+	// Useful for clearnet-over-tor.
+	envMap["SC_USE_TOR"] = "0"
 	envMap["SC_USER_ID"] = ""
 
 	err := godotenv.Load()
