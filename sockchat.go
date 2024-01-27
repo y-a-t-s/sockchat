@@ -9,9 +9,9 @@ import (
 
 func main() {
 	if err := loadEnv(); err != nil {
-		log.Fatal("Could not process .env", err)
+		log.Fatal("Could not process .env\n", err)
 	}
 
-	sock := socket.Init()
-	tui.InitUI(sock).App.Run()
+	ssn := socket.NewSession()
+	tui.InitUI(ssn).App.Run()
 }

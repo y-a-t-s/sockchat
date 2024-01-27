@@ -19,13 +19,13 @@ type ChatMessage struct {
 	RoomID          uint16 `json:"room_id"`
 }
 
-type ServerMessage struct {
+type serverMessage struct {
 	// Using json.RawMessage to delay parsing these parts.
 	Messages json.RawMessage `json:"messages"`
 	Users    json.RawMessage `json:"users"`
 }
 
-func (sock *ChatSocket) ChatDebug(msg string) bool {
+func (ssn *Session) ChatDebug(msg string) bool {
 	if !strings.HasPrefix(msg, "!debug") {
 		return false
 	}
@@ -36,49 +36,49 @@ func (sock *ChatSocket) ChatDebug(msg string) bool {
 	}
 
 	switch cmd[1] {
-	case "clientMsg":
+	case "msg":
 		if len(cmd) == 3 {
-			sock.ClientMsg(cmd[2])
+			ssn.ClientMsg(cmd[2])
 		}
 	}
 
 	return true
 }
 
-func (sock *ChatSocket) ClientMsg(msg string) {
+func (c *channels) ClientMsg(msg string) {
 	cm := ChatMessage{
 		Author: User{
 			ID:       0,
 			Username: "sockchat",
 		},
+		MessageID:   214748364,
 		MessageDate: time.Now().Unix(),
 		MessageRaw:  msg,
 	}
 
-	sock.Channels.Messages <- cm
+	c.Messages <- cm
 }
 
-func (sock *ChatSocket) responseHandler() {
-	defer sock.TryClose()
-	if sock.tor != nil {
-		defer sock.tor.Close()
-	}
+func (ssn *Session) responseHandler() {
+	go ssn.fetch()
+	go ssn.userHandler()
+	go ssn.write()
 
 	for {
-		msg := <-sock.Channels.serverResponse
+		msg := <-ssn.incoming
 		if len(msg) == 0 {
 			continue
 		}
 
 		// Error messages from the server usually aren't encoded.
 		if !json.Valid(msg) {
-			sock.ClientMsg(string(msg))
+			ssn.ClientMsg(string(msg))
 			continue
 		}
 
-		var sm ServerMessage
+		var sm serverMessage
 		if err := json.Unmarshal(msg, &sm); err != nil {
-			sock.ClientMsg(
+			ssn.ClientMsg(
 				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
 					msg,
 					err))
@@ -93,13 +93,13 @@ func (sock *ChatSocket) responseHandler() {
 			for jd.More() {
 				var msg ChatMessage
 				if err := jd.Decode(&msg); err != nil {
-					sock.ClientMsg(
+					ssn.ClientMsg(
 						fmt.Sprintf("Failed to parse message from server.\nError: %v",
 							err))
 				} else {
-					sock.Channels.Messages <- msg
+					ssn.Messages <- msg
 					// Send user data from msg to user handler to prioritize active users
-					sock.Channels.Users <- msg.Author
+					ssn.users <- msg.Author
 				}
 			}
 		}
@@ -108,11 +108,11 @@ func (sock *ChatSocket) responseHandler() {
 			for jd.More() {
 				var u User
 				if err := jd.Decode(&u); err != nil {
-					sock.ClientMsg(
+					ssn.ClientMsg(
 						fmt.Sprintf("Failed to parse user data from server: %v",
 							err))
 				} else {
-					sock.Channels.Users <- u
+					ssn.users <- u
 				}
 			}
 		}

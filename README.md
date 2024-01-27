@@ -18,9 +18,13 @@ If the connection fails, confirm the URL in your `.env` file is up-to-date.
 
 ## Features
 
-* Mention users using numerical IDs. When typing a message, any mentions in the form of `@USER_ID` will be replaced with `@USERNAME,` when the user hits TAB. Example: `@160024 stfu` -> `@y a t s, stfu`
+* Mention users using numerical IDs. When typing a message, any mentions in the form of `@USER_ID` will be replaced with `@USERNAME,` when you hit TAB. Example: `@160024 stfu` -> `@y a t s, stfu`
 
     * The ID mention can appear anywhere in the message, and more than 1 can be used at once. If it's not a recognized user ID, it will not be replaced.
+    
+* Standalone Tor support.
+
+* Messages that mention you are highlighted.
 
 <hr>
 

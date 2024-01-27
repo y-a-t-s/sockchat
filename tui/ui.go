@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"html"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func InitUI(sock *socket.ChatSocket) *UI {
+func InitUI(ssn *socket.Session) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -41,16 +42,16 @@ func InitUI(sock *socket.ChatSocket) *UI {
 		switch key {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(msgBox.GetText())
-			if !sock.ChatDebug(msg) {
+			if !ssn.ChatDebug(msg) {
 				// Add outgoing message to queue
-				sock.Channels.Outgoing <- []byte(msg)
+				ssn.Outgoing <- []byte(msg)
 			}
 			msgBox.SetText("")
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
-			msgBox.SetText(tabHandler(sock, msg))
+			msgBox.SetText(tabHandler(ssn, msg))
 		case tcell.KeyCtrlC:
-			sock.TryClose()
+			ssn.TryClose()
 			app.Stop()
 		}
 	})
@@ -62,15 +63,15 @@ func InitUI(sock *socket.ChatSocket) *UI {
 	app.SetRoot(flex, true).SetFocus(msgBox)
 
 	ui := &UI{app, flex, chatView, msgBox}
-	go ui.incomingHandler(sock)
+	go ui.incomingHandler(ssn)
 
 	return ui
 }
 
-func tabHandler(sock *socket.ChatSocket, msg string) string {
+func tabHandler(ssn *socket.Session, msg string) string {
 	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
 		id := m[1:]
-		if u := sock.GetUsername(id); u != id {
+		if u := ssn.GetUsername(id); u != id {
 			return fmt.Sprintf("@%s,", u)
 		}
 
@@ -78,26 +79,48 @@ func tabHandler(sock *socket.ChatSocket, msg string) string {
 	})
 }
 
-func (ui *UI) incomingHandler(sock *socket.ChatSocket) {
+func (ui *UI) incomingHandler(ssn *socket.Session) {
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
 	}
 
+	printTimestamp := func(msg *socket.ChatMessage) {
+		h, m, s := time.Unix(msg.MessageDate, 0).Clock()
+		// Print timestamp with user's color.
+		fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
+	}
+
+	var mentionRE *regexp.Regexp
+	var mentionIDs []string
+	mentionHandler := func(msg *socket.ChatMessage) {
+		if mentionRE == nil {
+			clientName := os.Getenv("SC_USER")
+			if clientName == "" {
+				return
+			}
+
+			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", clientName))
+		}
+
+		if mentionRE.MatchString(msg.MessageRaw) {
+			mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
+			ui.ChatView.Highlight(mentionIDs...)
+		}
+	}
+
 	var prev *socket.ChatMessage
 	for {
-		msg := <-sock.Channels.Messages
+		msg := <-ssn.Messages
 		if prev == nil || msg != *prev {
 			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
 
-			h, m, s := time.Unix(msg.MessageDate, 0).Clock()
-			// Print timestamp with user's color.
-			fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
-
+			printTimestamp(&msg)
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(ui.ChatView, "[\"%d\"]%s %s[\"\"]\n", msg.Author.ID, msg.Author.GetUserString(), unEsc)
+			fmt.Fprintf(ui.ChatView, "%s [\"%d\"]%s[\"\"]\n", msg.Author.GetUserString(), msg.MessageID, unEsc)
 
 			ui.ChatView.ScrollToEnd()
+			mentionHandler(&msg)
 		}
 
 		prev = &msg

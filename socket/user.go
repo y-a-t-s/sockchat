@@ -2,6 +2,8 @@ package socket
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 )
 
 type User struct {
@@ -18,13 +20,13 @@ type UserQuery struct {
 	Username chan string
 }
 
-func (sock *ChatSocket) GetUsername(id string) string {
+func (sock *Session) GetUsername(id string) string {
 	q := UserQuery{
 		ID:       id,
 		Username: make(chan string, 2),
 	}
 
-	sock.Channels.UserQuery <- q
+	sock.UserQuery <- q
 	if u := <-q.Username; u != "" {
 		return u
 	}
@@ -53,13 +55,32 @@ func (u *User) GetUserString() string {
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, u.Username, u.ID, color)
 }
 
-func (sock *ChatSocket) UserHandler() {
+func (sock *Session) userHandler() {
+	clientId := func() *uint32 {
+		if idStr := os.Getenv("SC_USER_ID"); idStr != "" {
+			id, err := strconv.Atoi(idStr)
+			if err != nil {
+				return nil
+			}
+
+			ui := uint32(id)
+			return &ui
+		}
+
+		return nil
+	}()
+
 	userMap := make(map[string]string)
 	for {
 		select {
-		case user := <-sock.Channels.Users:
+		case user := <-sock.users:
+			if clientId != nil && user.ID == *clientId {
+				os.Setenv("SC_USER", user.Username)
+				// Probably helps efficiency down the line.
+				clientId = nil
+			}
 			userMap[fmt.Sprint(user.ID)] = user.Username
-		case query := <-sock.Channels.UserQuery:
+		case query := <-sock.UserQuery:
 			query.Username <- userMap[query.ID]
 		}
 	}
