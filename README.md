@@ -24,11 +24,13 @@ If the connection fails, confirm the URL in your `.env` file is up-to-date.
     
 * Standalone Tor support.
 
-* Messages that mention you are highlighted.
+* Notifications when you're mentioned.
+
+Read the [wiki](https://github.com/y-a-t-s/sockchat/wiki/Configuration) to learn how to configure these features. It's pretty straightforward and is important to know.
 
 <hr>
 
-Donations are always welcome but never expected nor required:
+Donations are always appreciated but never expected nor required:
 
 XMR: `8BjCARiV2uB2gZTbbiMUetfRxcAYZgVM5fXxjEbpmb2nAu8ND1grazZ1EhMGdRqVerAtvEJeiy7SzA3SLXpg2CtRDtCAFfn`
 
