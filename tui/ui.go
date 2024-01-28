@@ -11,6 +11,7 @@ import (
 	"y-a-t-s/sockchat/socket"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/gen2brain/beeep"
 	"github.com/rivo/tview"
 )
 
@@ -104,6 +105,7 @@ func (ui *UI) incomingHandler(ssn *socket.Session) {
 		}
 
 		if mentionRE.MatchString(msg.MessageRaw) {
+			beeep.Notify("New mention", html.UnescapeString(msg.MessageRaw), "")
 			mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
 			ui.ChatView.Highlight(mentionIDs...)
 		}
