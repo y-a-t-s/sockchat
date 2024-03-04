@@ -12,6 +12,13 @@ func main() {
 		log.Fatal("Could not process .env\n", err)
 	}
 
-	ssn := socket.NewSession()
-	tui.InitUI(ssn).App.Run()
+	sock, err := socket.NewSocket()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = sock.Start()
+	if err != nil {
+		log.Fatal(err)
+	}
+	tui.InitUI(sock).App.Run()
 }

@@ -1,9 +1,7 @@
 package socket
 
 import (
-	"bytes"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"regexp"
@@ -13,16 +11,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type socket struct {
-	conn *websocket.Conn
-	room []byte
-	torInst
-	url url.URL
-}
-
-type Session struct {
+type Socket struct {
+	*websocket.Conn
 	*channels
-	*socket
+	*torInst
+	room []byte
+	url  *url.URL
 }
 
 type channels struct {
@@ -34,147 +28,135 @@ type channels struct {
 	users    chan User   // Received user data
 }
 
-func NewSession() *Session {
-	ssn := &Session{
-		channels: &channels{
+type Chat interface {
+	ClientMsg(msg string)
+	GetIncoming() ChatMessage
+	QueryUser(id string) string
+	Send(msg []byte)
+	Start() error
+}
+
+func NewSocket() (Socket, error) {
+	parseHost := func() *url.URL {
+		tmp := regexp.MustCompile(`(https?://)?([\w.]+)/?`).FindStringSubmatch(os.Getenv("SC_HOST"))
+		if len(tmp) < 3 {
+			panic("Failed to parse SC_HOST from env.")
+		}
+		// SC_HOST might start with the protocol or have a trailing /, so isolate the domain.
+		host, port := tmp[2], os.Getenv("SC_PORT")
+
+		// Assemble url to chat.ws with appropriate domain and port.
+		// Note: os.Getenv returns the port as a string, so no %d in the format string.
+		su, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
+		if err != nil {
+			panic(err)
+		}
+
+		return su
+	}
+
+	room := os.Getenv("SC_DEF_ROOM")
+	if room == "" {
+		panic("SC_DEF_ROOM not defined. Check .env")
+	}
+
+	sock := Socket{
+		nil,
+		&channels{
 			Messages:  make(chan ChatMessage, 1024),
 			Outgoing:  make(chan []byte, 16),
 			UserQuery: make(chan UserQuery, 16),
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
-		socket: newSocket(),
+		nil,
+		[]byte(room),
+		parseHost(),
 	}
 
+	return sock, nil
+}
+
+func (sock Socket) Start() error {
 	go func() {
-		ssn.connect()
-		defer ssn.TryClose()
-		defer ssn.stopTor()
+		sock.connect()
+		defer sock.CloseAll()
+		defer sock.stopTor()
 
-		ssn.responseHandler()
+		sock.responseHandler()
 	}()
 
-	return ssn
+	return nil
 }
 
-func newSocket() *socket {
-	su := func() url.URL {
-		host, port := strings.TrimRight(os.Getenv("SC_HOST"), "/"), os.Getenv("SC_PORT")
-		// Assemble url to chat.ws with appropriate domain and port.
-		// Note: os.Getenv returns the port as a string, so no %d in the format string.
-		su, err := url.Parse(fmt.Sprintf("wss://%s:%s/chat.ws", host, port))
-		if err != nil {
-			log.Fatal("Failed to parse socket URL.\n", err)
-		}
-
-		return *su
-	}()
-
-	room := os.Getenv("SC_DEF_ROOM")
-	if room == "" {
-		log.Panic("SC_DEF_ROOM not defined. Check .env")
-	}
-
-	return &socket{
-		conn: nil,
-		room: []byte(room),
-		url:  su,
-	}
+func (sock Socket) Send(msg []byte) {
+	sock.Outgoing <- msg
 }
 
-func (ssn *Session) connect() *Session {
-	// Close before re-opening if needed.
-	ssn.TryClose()
+func (sock *Socket) newDialer() (websocket.Dialer, error) {
+	// Set handshake timeout to 15 mins.
+	timeout, err := time.ParseDuration("15m")
+	if err != nil {
+		panic(err)
+	}
 
-	ssn.ClientMsg("Opening socket...")
-	wd := func() websocket.Dialer {
-		// Set handshake timeout to 15 mins.
-		timeout, err := time.ParseDuration("15m")
-		if err != nil {
-			log.Panic("Failed to parse timeout duration string.\n", err)
+	wd := websocket.Dialer{
+		EnableCompression: true,
+		HandshakeTimeout:  timeout,
+	}
+
+	// If SC_HOST is the .onion domain, the value of SC_USE_TOR is irrelevant.
+	if os.Getenv("SC_USE_TOR") == "1" || strings.HasSuffix(sock.url.Hostname(), ".onion") {
+		if sock.tor == nil {
+			sock.tor = startTor()
 		}
+		sock.getTorCtx()
+		// Dial socket through Tor proxy context.
+		wd.NetDialContext = sock.torCtx
+	}
 
-		wd := websocket.Dialer{
-			EnableCompression: true,
-			HandshakeTimeout:  timeout,
-		}
+	return wd, nil
+}
 
-		// If SC_HOST is the .onion domain, the value of SC_USE_TOR is irrelevant.
-		if os.Getenv("SC_USE_TOR") == "1" || strings.HasSuffix(ssn.url.Hostname(), ".onion") {
-			if ssn.tor == nil {
-				ssn.tor = startTor()
-			}
-			ssn.getTorCtx()
-			// Dial socket through Tor proxy context.
-			wd.NetDialContext = ssn.torCtx
-		}
+func (sock *Socket) connect() error {
+	sock.CloseAll()
 
-		return wd
-	}()
+	sock.ClientMsg("Opening socket...")
 
-	conn, _, err := wd.Dial(ssn.url.String(), map[string][]string{
+	dialer, err := sock.newDialer()
+	if err != nil {
+		return err
+	}
+	conn, _, err := dialer.Dial(sock.url.String(), map[string][]string{
 		"Cookie":     []string{os.Args[1]},
 		"User-Agent": []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"},
 	})
 	if err != nil {
-		ssn.ClientMsg("Failed to connect. Retrying...")
-		return ssn.connect()
+		sock.ClientMsg("Failed to connect. Retrying...")
+		return sock.connect()
 	}
-	ssn.ClientMsg("Connected.\n")
+	sock.ClientMsg("Connected.\n")
 
-	ssn.conn = conn
+	sock.Conn = conn
 	// Let caller defer close.
 
 	// Send /join message for desired room.
-	ssn.Outgoing <- []byte(fmt.Sprintf("/join %s", ssn.room))
-
-	return ssn
-}
-
-func (ssn *Session) fetch() {
-	for {
-		if ssn.conn == nil {
-			ssn.connect()
-		}
-
-		_, msg, err := ssn.conn.ReadMessage()
-		if err != nil {
-			ssn.ClientMsg("Failed to read from socket.\n")
-			ssn.connect()
-		}
-
-		ssn.incoming <- msg
+	msg := []byte(fmt.Sprintf("/join %s", sock.room))
+	err = sock.WriteMessage(websocket.TextMessage, msg)
+	if err != nil {
+		sock.ClientMsg(fmt.Sprintf("Failed to send join message."))
 	}
+
+	return nil
 }
 
-func (ssn *Session) write() {
-	joinRE := regexp.MustCompile(`^/join \d+$`)
-	for {
-		// Trim unnecessary whitespace.
-		msg := bytes.TrimSpace(<-ssn.Outgoing)
-		// Ignore empty messages.
-		if len(msg) == 0 {
-			continue
-		}
-
-		// Update selected room if /join message was sent.
-		if joinRE.Match(msg) {
-			ssn.room = bytes.Split(msg, []byte(" "))[1]
-		}
-
-		if err := ssn.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			ssn.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
-		}
-	}
-}
-
-func (sock *socket) TryClose() bool {
-	if sock.conn == nil {
+func (sock *Socket) CloseAll() bool {
+	if sock.Conn == nil {
 		return false
 	}
 
-	sock.conn.Close()
-	sock.conn = nil
+	sock.Close()
+	sock.Conn = nil
 
 	return true
 }

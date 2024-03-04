@@ -48,6 +48,8 @@ func loadEnv() error {
 		// If SC_HOST is a .onion domain, this is ignored.
 		// Useful for clearnet-over-tor.
 		"SC_USE_TOR": "0",
+
+		"SC_LURKER_MODE": "0",
 	}
 
 	// Check for missing values.

@@ -26,6 +26,8 @@ If the connection fails, confirm the URL in your `.env` file is up-to-date.
 
 * Notifications when you're mentioned.
 
+* Lurker mode.
+
 Read the [wiki](https://github.com/y-a-t-s/sockchat/wiki/Configuration) to learn how to configure these features. It's pretty straightforward and is important to know.
 
 <hr>

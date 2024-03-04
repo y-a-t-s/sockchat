@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
+	"os"
+	"regexp"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type ChatMessage struct {
@@ -25,96 +28,124 @@ type serverMessage struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (ssn *Session) ChatDebug(msg string) bool {
-	if !strings.HasPrefix(msg, "!debug") {
-		return false
-	}
-
-	cmd := strings.SplitN(msg, " ", 3)
-	if len(cmd) < 2 {
-		return true
-	}
-
-	switch cmd[1] {
-	case "msg":
-		if len(cmd) == 3 {
-			ssn.ClientMsg(cmd[2])
-		}
-	}
-
-	return true
-}
-
-func (c *channels) ClientMsg(msg string) {
+func (sock Socket) ClientMsg(msg string) {
 	cm := ChatMessage{
 		Author: User{
 			ID:       0,
 			Username: "sockchat",
 		},
-		MessageID:   214748364,
+		MessageID:   0,
 		MessageDate: time.Now().Unix(),
 		MessageRaw:  msg,
 	}
 
-	c.Messages <- cm
+	sock.Messages <- cm
 }
 
-func (ssn *Session) responseHandler() {
-	go ssn.fetch()
-	go ssn.userHandler()
-	go ssn.write()
+func (sock Socket) GetIncoming() ChatMessage {
+	msg := <-sock.Messages
+	return msg
+}
+
+func (sock *Socket) fetch() {
+	for {
+		if sock.Conn == nil {
+			sock.connect()
+		}
+
+		_, msg, err := sock.ReadMessage()
+		if err != nil {
+			sock.ClientMsg("Failed to read from socket.\n")
+			sock.connect()
+		}
+
+		sock.incoming <- msg
+	}
+}
+
+func (sock *Socket) write() {
+	joinRE := regexp.MustCompile(`^/join \d+$`)
+	for {
+		// Trim unnecessary whitespace.
+		msg := bytes.TrimSpace(<-sock.Outgoing)
+		// Ignore empty messages.
+		if len(msg) == 0 {
+			continue
+		}
+
+		// Update selected room if /join message was sent.
+		if joinRE.Match(msg) {
+			sock.room = bytes.Split(msg, []byte(" "))[1]
+		}
+
+		if err := sock.WriteMessage(websocket.TextMessage, msg); err != nil {
+			sock.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
+		}
+	}
+}
+
+func (sock *Socket) responseHandler() {
+	go sock.fetch()
+	go sock.userHandler()
+	lurker := os.Getenv("SC_LURKER_MODE")
+	if lurker != "1" {
+		go sock.write()
+	}
+
+	// out has to be passed as a pointer for the json Decode to work.
+	parseServerMsg := func(b []byte, out interface{}) {
+		jd := json.NewDecoder(bytes.NewReader(b))
+
+		switch out.(type) {
+		case *ChatMessage:
+			if _, err := jd.Token(); err != nil {
+				log.Fatal(err)
+			}
+		}
+
+		for jd.More() {
+			if err := jd.Decode(out); err != nil {
+				log.Printf("Failed to parse data from server.\nError: %v", err)
+				continue
+			}
+
+			switch out.(type) {
+			case *ChatMessage:
+				msg := *(out.(*ChatMessage))
+				sock.Messages <- msg
+				sock.users <- msg.Author
+			case *User:
+				sock.users <- *(out.(*User))
+			}
+		}
+	}
 
 	for {
-		msg := <-ssn.incoming
+		msg := <-sock.incoming
 		if len(msg) == 0 {
 			continue
 		}
 
 		// Error messages from the server usually aren't encoded.
 		if !json.Valid(msg) {
-			ssn.ClientMsg(string(msg))
+			sock.ClientMsg(string(msg))
 			continue
 		}
 
 		var sm serverMessage
 		if err := json.Unmarshal(msg, &sm); err != nil {
-			ssn.ClientMsg(
+			sock.ClientMsg(
 				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
 					msg,
 					err))
+			continue
 		}
 
 		if len(sm.Messages) > 0 {
-			jd := json.NewDecoder(bytes.NewReader(sm.Messages))
-			if _, err := jd.Token(); err != nil {
-				log.Fatal(err)
-			}
-
-			for jd.More() {
-				var msg ChatMessage
-				if err := jd.Decode(&msg); err != nil {
-					ssn.ClientMsg(
-						fmt.Sprintf("Failed to parse message from server.\nError: %v",
-							err))
-				} else {
-					ssn.Messages <- msg
-					// Send user data from msg to user handler to prioritize active users
-					ssn.users <- msg.Author
-				}
-			}
+			parseServerMsg(sm.Messages, &ChatMessage{})
 		}
 		if len(sm.Users) > 0 {
-			jd := json.NewDecoder(bytes.NewReader(sm.Users))
-			for jd.More() {
-				var u User
-				if err := jd.Decode(&u); err != nil {
-					ssn.ClientMsg(
-						fmt.Sprintf("Failed to parse user data from server: %v",
-							err))
-				} else {
-					ssn.users <- u
-				}
-			}
+			parseServerMsg(sm.Users, &User{})
 		}
 	}
 }

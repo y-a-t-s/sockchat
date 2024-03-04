@@ -22,7 +22,7 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func InitUI(ssn *socket.Session) *UI {
+func InitUI(c socket.Chat) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -43,36 +43,36 @@ func InitUI(ssn *socket.Session) *UI {
 		switch key {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(msgBox.GetText())
-			if !ssn.ChatDebug(msg) {
-				// Add outgoing message to queue
-				ssn.Outgoing <- []byte(msg)
-			}
+			// Add outgoing message to queue
+			c.Send([]byte(msg))
 			msgBox.SetText("")
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
-			msgBox.SetText(tabHandler(ssn, msg))
+			msgBox.SetText(tabHandler(c, msg))
 		case tcell.KeyCtrlC:
-			ssn.TryClose()
 			app.Stop()
 		}
 	})
 	msgBox.SetLabel("Message: ")
 
 	flex.AddItem(chatView, 0, 1, false)
-	flex.AddItem(msgBox, 1, 1, false)
+	lurker := os.Getenv("SC_LURKER_MODE")
+	if lurker != "1" {
+		flex.AddItem(msgBox, 1, 1, false)
+	}
 
 	app.SetRoot(flex, true).SetFocus(msgBox)
 
 	ui := &UI{app, flex, chatView, msgBox}
-	go ui.incomingHandler(ssn)
+	go ui.incomingHandler(c)
 
 	return ui
 }
 
-func tabHandler(ssn *socket.Session, msg string) string {
+func tabHandler(c socket.Chat, msg string) string {
 	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
 		id := m[1:]
-		if u := ssn.GetUsername(id); u != id {
+		if u := c.QueryUser(id); u != id {
 			return fmt.Sprintf("@%s,", u)
 		}
 
@@ -80,7 +80,7 @@ func tabHandler(ssn *socket.Session, msg string) string {
 	})
 }
 
-func (ui *UI) incomingHandler(ssn *socket.Session) {
+func (ui *UI) incomingHandler(c socket.Chat) {
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
@@ -113,7 +113,7 @@ func (ui *UI) incomingHandler(ssn *socket.Session) {
 
 	var prev *socket.ChatMessage
 	for {
-		msg := <-ssn.Messages
+		msg := c.GetIncoming()
 		if prev == nil || msg != *prev {
 			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
 
