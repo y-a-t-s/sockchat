@@ -13,8 +13,8 @@ import (
 
 type Socket struct {
 	*websocket.Conn
-	*channels
 	*torInst
+	channels
 	room []byte
 	url  *url.URL
 }
@@ -38,11 +38,11 @@ type Chat interface {
 
 func NewSocket() (Socket, error) {
 	parseHost := func() *url.URL {
+		// SC_HOST might start with the protocol or have a trailing /, so isolate the domain.
 		tmp := regexp.MustCompile(`(https?://)?([\w.]+)/?`).FindStringSubmatch(os.Getenv("SC_HOST"))
 		if len(tmp) < 3 {
 			panic("Failed to parse SC_HOST from env.")
 		}
-		// SC_HOST might start with the protocol or have a trailing /, so isolate the domain.
 		host, port := tmp[2], os.Getenv("SC_PORT")
 
 		// Assemble url to chat.ws with appropriate domain and port.
@@ -62,19 +62,38 @@ func NewSocket() (Socket, error) {
 
 	sock := Socket{
 		nil,
-		&channels{
+		nil,
+		channels{
 			Messages:  make(chan ChatMessage, 1024),
 			Outgoing:  make(chan []byte, 16),
 			UserQuery: make(chan UserQuery, 16),
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
-		nil,
 		[]byte(room),
 		parseHost(),
 	}
 
 	return sock, nil
+}
+
+func (sock Socket) ClientMsg(msg string) {
+	cm := ChatMessage{
+		Author: User{
+			ID:       0,
+			Username: "sockchat",
+		},
+		MessageID:   0,
+		MessageDate: time.Now().Unix(),
+		MessageRaw:  msg,
+	}
+
+	sock.Messages <- cm
+}
+
+func (sock Socket) GetIncoming() ChatMessage {
+	msg := <-sock.Messages
+	return msg
 }
 
 func (sock Socket) Start() error {
@@ -141,10 +160,20 @@ func (sock *Socket) connect() error {
 	// Let caller defer close.
 
 	// Send /join message for desired room.
-	msg := []byte(fmt.Sprintf("/join %s", sock.room))
-	err = sock.WriteMessage(websocket.TextMessage, msg)
+	// Writing directly to avoid requiring the msgWriter routine, which may not be running.
+	err = sock.write([]byte(fmt.Sprintf("/join %s", sock.room)))
 	if err != nil {
 		sock.ClientMsg(fmt.Sprintf("Failed to send join message."))
+	}
+
+	return nil
+}
+
+func (sock *Socket) write(msg []byte) error {
+	err := sock.WriteMessage(websocket.TextMessage, msg)
+	if err != nil {
+		sock.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
+		return err
 	}
 
 	return nil

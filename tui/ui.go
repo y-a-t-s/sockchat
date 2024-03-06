@@ -25,6 +25,7 @@ type UI struct {
 func InitUI(c socket.Chat) *UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
+	itemCount := 0
 
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
@@ -34,34 +35,55 @@ func InitUI(c socket.Chat) *UI {
 		SetChangedFunc(func() {
 			app.Draw()
 		})
-	chatView.SetBorder(false)
-
 	msgBox := tview.NewInputField().
+		SetAcceptanceFunc(tview.InputFieldMaxLength(1024)).
+		SetFieldBackgroundColor(tcell.PaletteColor(0)).
 		SetFieldWidth(0).
-		SetAcceptanceFunc(tview.InputFieldMaxLength(1024))
+		SetLabel("Message: ")
+
+	chatView.SetBorder(false)
+	chatView.SetDoneFunc(func(key tcell.Key) {
+		switch key {
+		case tcell.KeyBacktab:
+			if itemCount < 2 {
+				break
+			}
+
+			flex.AddItem(msgBox, 1, 1, true)
+			app.SetFocus(flex)
+		}
+	})
+
 	msgBox.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(msgBox.GetText())
-			// Add outgoing message to queue
+			// Add outgoing message to queue.
 			c.Send([]byte(msg))
 			msgBox.SetText("")
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
 			msgBox.SetText(tabHandler(c, msg))
+		case tcell.KeyBacktab:
+			if itemCount < 2 {
+				break
+			}
+
+			flex.RemoveItem(msgBox)
+			app.SetFocus(chatView)
 		case tcell.KeyCtrlC:
 			app.Stop()
 		}
 	})
-	msgBox.SetLabel("Message: ")
 
 	flex.AddItem(chatView, 0, 1, false)
 	lurker := os.Getenv("SC_LURKER_MODE")
 	if lurker != "1" {
-		flex.AddItem(msgBox, 1, 1, false)
+		flex.AddItem(msgBox, 1, 1, true)
 	}
+	itemCount = flex.GetItemCount()
 
-	app.SetRoot(flex, true).SetFocus(msgBox)
+	app.SetRoot(flex, true).SetFocus(flex)
 
 	ui := &UI{app, flex, chatView, msgBox}
 	go ui.incomingHandler(c)
@@ -93,6 +115,7 @@ func (ui *UI) incomingHandler(c socket.Chat) {
 	}
 
 	var mentionRE *regexp.Regexp
+	// IDs of any messages that mention the user. Used for message highlighting.
 	var mentionIDs []string
 	mentionHandler := func(msg *socket.ChatMessage) {
 		if mentionRE == nil {

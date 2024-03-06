@@ -52,7 +52,7 @@ func (sock Socket) QueryUser(id string) string {
 	}
 
 	// If the user data was not found for id, return the original match.
-	return fmt.Sprint(id)
+	return id
 }
 
 func (sock *Socket) userHandler() {

@@ -7,9 +7,6 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 type ChatMessage struct {
@@ -22,29 +19,10 @@ type ChatMessage struct {
 	RoomID          uint16 `json:"room_id"`
 }
 
-type serverMessage struct {
+type serverResponse struct {
 	// Using json.RawMessage to delay parsing these parts.
 	Messages json.RawMessage `json:"messages"`
 	Users    json.RawMessage `json:"users"`
-}
-
-func (sock Socket) ClientMsg(msg string) {
-	cm := ChatMessage{
-		Author: User{
-			ID:       0,
-			Username: "sockchat",
-		},
-		MessageID:   0,
-		MessageDate: time.Now().Unix(),
-		MessageRaw:  msg,
-	}
-
-	sock.Messages <- cm
-}
-
-func (sock Socket) GetIncoming() ChatMessage {
-	msg := <-sock.Messages
-	return msg
 }
 
 func (sock *Socket) fetch() {
@@ -63,7 +41,7 @@ func (sock *Socket) fetch() {
 	}
 }
 
-func (sock *Socket) write() {
+func (sock *Socket) msgWriter() {
 	joinRE := regexp.MustCompile(`^/join \d+$`)
 	for {
 		// Trim unnecessary whitespace.
@@ -78,9 +56,7 @@ func (sock *Socket) write() {
 			sock.room = bytes.Split(msg, []byte(" "))[1]
 		}
 
-		if err := sock.WriteMessage(websocket.TextMessage, msg); err != nil {
-			sock.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
-		}
+		sock.write(msg)
 	}
 }
 
@@ -89,11 +65,11 @@ func (sock *Socket) responseHandler() {
 	go sock.userHandler()
 	lurker := os.Getenv("SC_LURKER_MODE")
 	if lurker != "1" {
-		go sock.write()
+		go sock.msgWriter()
 	}
 
 	// out has to be passed as a pointer for the json Decode to work.
-	parseServerMsg := func(b []byte, out interface{}) {
+	parseResponse := func(b []byte, out interface{}) {
 		jd := json.NewDecoder(bytes.NewReader(b))
 
 		switch out.(type) {
@@ -132,7 +108,7 @@ func (sock *Socket) responseHandler() {
 			continue
 		}
 
-		var sm serverMessage
+		var sm serverResponse
 		if err := json.Unmarshal(msg, &sm); err != nil {
 			sock.ClientMsg(
 				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
@@ -142,10 +118,10 @@ func (sock *Socket) responseHandler() {
 		}
 
 		if len(sm.Messages) > 0 {
-			parseServerMsg(sm.Messages, &ChatMessage{})
+			parseResponse(sm.Messages, &ChatMessage{})
 		}
 		if len(sm.Users) > 0 {
-			parseServerMsg(sm.Users, &User{})
+			parseResponse(sm.Users, &User{})
 		}
 	}
 }
