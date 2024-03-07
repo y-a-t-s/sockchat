@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
+	"strconv"
 )
 
 type ChatMessage struct {
@@ -42,7 +42,7 @@ func (sock *Socket) fetch() {
 }
 
 func (sock *Socket) msgWriter() {
-	joinRE := regexp.MustCompile(`^/join \d+$`)
+	joinRE := regexp.MustCompile(`^/join (\d)+$`)
 	for {
 		// Trim unnecessary whitespace.
 		msg := bytes.TrimSpace(<-sock.Outgoing)
@@ -52,8 +52,12 @@ func (sock *Socket) msgWriter() {
 		}
 
 		// Update selected room if /join message was sent.
-		if joinRE.Match(msg) {
-			sock.room = bytes.Split(msg, []byte(" "))[1]
+		if room := joinRE.FindSubmatch(msg); room != nil {
+			tmp, err := strconv.Atoi(string(room[1]))
+			if err != nil {
+				continue
+			}
+			sock.room = uint(tmp)
 		}
 
 		sock.write(msg)
@@ -63,8 +67,7 @@ func (sock *Socket) msgWriter() {
 func (sock *Socket) responseHandler() {
 	go sock.fetch()
 	go sock.userHandler()
-	lurker := os.Getenv("SC_LURKER_MODE")
-	if lurker != "1" {
+	if !sock.readOnly {
 		go sock.msgWriter()
 	}
 

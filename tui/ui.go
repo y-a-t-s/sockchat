@@ -3,11 +3,11 @@ package tui
 import (
 	"fmt"
 	"html"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/socket"
 
 	"github.com/gdamore/tcell/v2"
@@ -22,10 +22,9 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func InitUI(c socket.Chat) *UI {
+func InitUI(c socket.Chat, cfg config.Config) UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
-	itemCount := 0
 
 	chatView := tview.NewTextView().
 		SetDynamicColors(true).
@@ -39,16 +38,12 @@ func InitUI(c socket.Chat) *UI {
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024)).
 		SetFieldBackgroundColor(tcell.PaletteColor(0)).
 		SetFieldWidth(0).
-		SetLabel("Message: ")
+		SetLabel("> ")
 
 	chatView.SetBorder(false)
 	chatView.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyBacktab:
-			if itemCount < 2 {
-				break
-			}
-
 			flex.AddItem(msgBox, 1, 1, true)
 			app.SetFocus(flex)
 		}
@@ -59,16 +54,12 @@ func InitUI(c socket.Chat) *UI {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(msgBox.GetText())
 			// Add outgoing message to queue.
-			c.Send([]byte(msg))
+			c.Send(msg)
 			msgBox.SetText("")
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
 			msgBox.SetText(tabHandler(c, msg))
 		case tcell.KeyBacktab:
-			if itemCount < 2 {
-				break
-			}
-
 			flex.RemoveItem(msgBox)
 			app.SetFocus(chatView)
 		case tcell.KeyCtrlC:
@@ -77,15 +68,13 @@ func InitUI(c socket.Chat) *UI {
 	})
 
 	flex.AddItem(chatView, 0, 1, false)
-	lurker := os.Getenv("SC_LURKER_MODE")
-	if lurker != "1" {
+	if !cfg.ReadOnly {
 		flex.AddItem(msgBox, 1, 1, true)
 	}
-	itemCount = flex.GetItemCount()
 
 	app.SetRoot(flex, true).SetFocus(flex)
 
-	ui := &UI{app, flex, chatView, msgBox}
+	ui := UI{app, flex, chatView, msgBox}
 	go ui.incomingHandler(c)
 
 	return ui
@@ -119,12 +108,11 @@ func (ui *UI) incomingHandler(c socket.Chat) {
 	var mentionIDs []string
 	mentionHandler := func(msg *socket.ChatMessage) {
 		if mentionRE == nil {
-			clientName := os.Getenv("SC_USER")
-			if clientName == "" {
-				return
+			if cn := c.GetClientName(); len(cn) > 0 {
+				mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", cn))
 			}
 
-			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", clientName))
+			return
 		}
 
 		if mentionRE.MatchString(msg.MessageRaw) {

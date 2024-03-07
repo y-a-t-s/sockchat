@@ -3,22 +3,27 @@ package main
 import (
 	"log"
 
+	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/socket"
 	"y-a-t-s/sockchat/tui"
 )
 
 func main() {
-	if err := loadEnv(); err != nil {
+	if err := config.LoadEnv(); err != nil {
 		log.Fatal("Could not process .env\n", err)
 	}
 
-	sock, err := socket.NewSocket()
+	cfg, err := config.ParseArgs()
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = sock.Start()
+
+	sock, err := socket.NewSocket(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	tui.InitUI(sock).App.Run()
+	if err = sock.Start(); err != nil {
+		log.Fatal(err)
+	}
+	tui.InitUI(sock, cfg).App.Run()
 }
