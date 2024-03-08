@@ -20,6 +20,9 @@ type Config struct {
 
 func ParseArgs() (Config, error) {
 	cfg := Config{}
+	if err := LoadEnv(); err != nil {
+		return cfg, err
+	}
 
 	newEnvError := func(errStr string) error {
 		return errors.New(fmt.Sprintf("%s\nCheck .env or specify with argument.", errStr))

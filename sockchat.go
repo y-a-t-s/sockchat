@@ -9,10 +9,6 @@ import (
 )
 
 func main() {
-	if err := config.LoadEnv(); err != nil {
-		log.Fatal("Could not process .env\n", err)
-	}
-
 	cfg, err := config.ParseArgs()
 	if err != nil {
 		log.Fatal(err)

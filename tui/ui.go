@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"html"
+	"io/fs"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -97,11 +100,27 @@ func (ui *UI) incomingHandler(c socket.Socket) {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
 	}
 
-	printTimestamp := func(msg *socket.ChatMessage) {
-		h, m, s := time.Unix(msg.MessageDate, 0).Clock()
-		// Print timestamp with user's color.
-		fmt.Fprintf(ui.ChatView, "[%s::u]%0.2d:%0.2d:%0.2d[-::U] ", msg.Author.GetColor(), h, m, s)
-	}
+	logFeed := make(chan string, 128)
+	go func() {
+		const logDir = "logs"
+		err := os.Mkdir(logDir, 0755)
+		if err != nil && !errors.Is(err, fs.ErrExist) {
+			panic(err)
+		}
+		fname := fmt.Sprintf("%s/%s.log", logDir, time.Now().Format("Jan 2 15:04:05 2006 MST"))
+		logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			panic(err)
+		}
+		defer logFile.Close()
+
+		for {
+			select {
+			case msg := <-logFeed:
+				logFile.WriteString(msg)
+			}
+		}
+	}()
 
 	var mentionRE *regexp.Regexp
 	// IDs of any messages that mention the user. Used for message highlighting.
@@ -128,10 +147,17 @@ func (ui *UI) incomingHandler(c socket.Socket) {
 		if prev == nil || msg != *prev {
 			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
 
-			printTimestamp(&msg)
-			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(ui.ChatView, "%s [\"%d\"]%s[\"\"]\n", msg.Author.GetUserString(), msg.MessageID, unEsc)
+			h, m, s := time.Unix(msg.MessageDate, 0).Clock()
+			// Format timestamp with user's color.
+			timestamp := fmt.Sprintf("%0.2d:%0.2d:%0.2d", h, m, s)
 
+			logFeed <- fmt.Sprintf("[%s] [%s (#%d)]: %s\n", timestamp,
+				msg.Author.Username, msg.Author.ID, unEsc)
+
+			// Print chat message, preceded by the sender's username and ID.
+			fmt.Fprintf(ui.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+				msg.Author.GetColor(), timestamp, msg.Author.GetUserString(),
+				msg.MessageID, unEsc)
 			ui.ChatView.ScrollToEnd()
 			mentionHandler(&msg)
 		}

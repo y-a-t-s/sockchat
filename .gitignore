@@ -1,9 +1,10 @@
-.DS_Store
-.env*
+.*
+!.gitignore
 *.log
 tmp/
 
 data-dir-*/
+logs/
 
 GPATH
 GRTAGS
