@@ -40,13 +40,13 @@ func (u User) GetUserString() string {
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, u.Username, u.ID, color)
 }
 
-func (sock *Socket) QueryUser(id string) string {
+func (s *sock) QueryUser(id string) string {
 	q := UserQuery{
 		ID:       id,
 		Username: make(chan string, 2),
 	}
 
-	sock.UserQuery <- q
+	s.userQuery <- q
 	if u := <-q.Username; u != "" {
 		return u
 	}
@@ -55,7 +55,7 @@ func (sock *Socket) QueryUser(id string) string {
 	return id
 }
 
-func (sock *Socket) userHandler() {
+func (s *sock) userHandler() {
 	clientId := uint32(0)
 	if idStr := os.Getenv("SC_USER_ID"); idStr != "" {
 		id, err := strconv.Atoi(idStr)
@@ -69,14 +69,14 @@ func (sock *Socket) userHandler() {
 	userMap := make(map[string]string)
 	for {
 		select {
-		case user := <-sock.users:
+		case user := <-s.users:
 			if clientId != 0 && user.ID == clientId {
-				sock.clientName = user.Username
+				s.clientName = user.Username
 				// Probably helps efficiency down the line.
 				clientId = 0
 			}
 			userMap[fmt.Sprint(user.ID)] = user.Username
-		case query := <-sock.UserQuery:
+		case query := <-s.userQuery:
 			query.Username <- userMap[query.ID]
 		}
 	}

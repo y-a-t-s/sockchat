@@ -22,8 +22,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err = sock.Start(); err != nil {
-		log.Fatal(err)
-	}
+	sock.Start()
 	tui.InitUI(sock, cfg).App.Run()
 }

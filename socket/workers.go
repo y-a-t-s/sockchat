@@ -25,27 +25,27 @@ type serverResponse struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (sock *Socket) fetch() {
+func (s *sock) fetch() {
 	for {
-		if sock.Conn == nil {
-			sock.connect()
+		if s.Conn == nil {
+			s.connect()
 		}
 
-		_, msg, err := sock.ReadMessage()
+		_, msg, err := s.ReadMessage()
 		if err != nil {
-			sock.ClientMsg("Failed to read from socket.\n")
-			sock.connect()
+			s.ClientMsg("Failed to read from socket.\n")
+			s.connect()
 		}
 
-		sock.incoming <- msg
+		s.incoming <- msg
 	}
 }
 
-func (sock *Socket) msgWriter() {
+func (s *sock) msgWriter() {
 	joinRE := regexp.MustCompile(`^/join (\d)+$`)
 	for {
 		// Trim unnecessary whitespace.
-		msg := bytes.TrimSpace(<-sock.Outgoing)
+		msg := bytes.TrimSpace(<-s.outgoing)
 		// Ignore empty messages.
 		if len(msg) == 0 {
 			continue
@@ -57,18 +57,18 @@ func (sock *Socket) msgWriter() {
 			if err != nil {
 				continue
 			}
-			sock.room = uint(tmp)
+			s.room = uint(tmp)
 		}
 
-		sock.write(msg)
+		s.write(msg)
 	}
 }
 
-func (sock *Socket) responseHandler() {
-	go sock.fetch()
-	go sock.userHandler()
-	if !sock.readOnly {
-		go sock.msgWriter()
+func (s *sock) responseHandler() {
+	go s.fetch()
+	go s.userHandler()
+	if !s.readOnly {
+		go s.msgWriter()
 	}
 
 	// out has to be passed as a pointer for the json Decode to work.
@@ -91,29 +91,29 @@ func (sock *Socket) responseHandler() {
 			switch out.(type) {
 			case *ChatMessage:
 				msg := *(out.(*ChatMessage))
-				sock.Messages <- msg
-				sock.users <- msg.Author
+				s.messages <- msg
+				s.users <- msg.Author
 			case *User:
-				sock.users <- *(out.(*User))
+				s.users <- *(out.(*User))
 			}
 		}
 	}
 
 	for {
-		msg := <-sock.incoming
+		msg := <-s.incoming
 		if len(msg) == 0 {
 			continue
 		}
 
 		// Error messages from the server usually aren't encoded.
 		if !json.Valid(msg) {
-			sock.ClientMsg(string(msg))
+			s.ClientMsg(string(msg))
 			continue
 		}
 
 		var sm serverResponse
 		if err := json.Unmarshal(msg, &sm); err != nil {
-			sock.ClientMsg(
+			s.ClientMsg(
 				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
 					msg,
 					err))

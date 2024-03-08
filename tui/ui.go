@@ -22,7 +22,7 @@ type UI struct {
 	InputBox *tview.InputField
 }
 
-func InitUI(c socket.Chat, cfg config.Config) UI {
+func InitUI(c socket.Socket, cfg config.Config) UI {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -80,7 +80,7 @@ func InitUI(c socket.Chat, cfg config.Config) UI {
 	return ui
 }
 
-func tabHandler(c socket.Chat, msg string) string {
+func tabHandler(c socket.Socket, msg string) string {
 	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
 		id := m[1:]
 		if u := c.QueryUser(id); u != id {
@@ -91,7 +91,7 @@ func tabHandler(c socket.Chat, msg string) string {
 	})
 }
 
-func (ui *UI) incomingHandler(c socket.Chat) {
+func (ui *UI) incomingHandler(c socket.Socket) {
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
@@ -108,11 +108,11 @@ func (ui *UI) incomingHandler(c socket.Chat) {
 	var mentionIDs []string
 	mentionHandler := func(msg *socket.ChatMessage) {
 		if mentionRE == nil {
-			if cn := c.GetClientName(); len(cn) > 0 {
-				mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", cn))
+			cn := c.GetClientName()
+			if len(cn) == 0 {
+				return
 			}
-
-			return
+			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", cn))
 		}
 
 		if mentionRE.MatchString(msg.MessageRaw) {

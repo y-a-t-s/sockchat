@@ -19,7 +19,6 @@ func TestSocket(t *testing.T) {
 		t.Error(err)
 	}
 
-	err = sock.connect()
 	if err != nil {
 		t.Error(err)
 	}

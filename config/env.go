@@ -52,7 +52,6 @@ func (em envMap) checkEnv() error {
 	return nil
 }
 
-// TODO: turn envMap into type and use receiver methods.
 func LoadEnv() error {
 	em := newEnvMap()
 
@@ -60,7 +59,6 @@ func LoadEnv() error {
 	if err := em.checkEnv(); err != nil {
 		return err
 	}
-
 	if err := godotenv.Load(); err != nil {
 		log.Println(".env file not found. Creating new one.")
 		return em.writeEnv()
