@@ -89,54 +89,11 @@ func InitUI(c socket.Socket, cfg config.Config) {
 	ui.cleanup()
 }
 
-func tabHandler(c socket.Socket, msg string) string {
-	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
-		id := m[1:]
-		if u := c.QueryUser(id); u != id {
-			return fmt.Sprintf("@%s,", u)
-		}
-
-		return m
-	})
-}
-
 func (u *ui) cleanup() {
 	if u.logWriter != nil {
 		u.logWriter.Flush()
 	}
 	u.App.Stop()
-}
-
-func (u *ui) logger(logFeed chan string) error {
-	const logDir = "logs"
-	t := time.Now()
-	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
-
-	err := os.Mkdir(logDir, 0755)
-	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	err = os.Mkdir(outDir, 0755)
-	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-
-	fname := fmt.Sprintf("%s/%s.log", outDir, t.Format("2006-01-02 15:04:05 MST"))
-	logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-
-	u.logWriter = bufio.NewWriter(logFile)
-	defer u.logWriter.Flush()
-
-	for {
-		select {
-		case msg := <-logFeed:
-			u.logWriter.WriteString(msg)
-		}
-	}
 }
 
 func (u *ui) incomingHandler(c socket.Socket) {
@@ -190,4 +147,47 @@ func (u *ui) incomingHandler(c socket.Socket) {
 
 		prev = &msg
 	}
+}
+
+func (u *ui) logger(logFeed chan string) error {
+	const logDir = "logs"
+	t := time.Now()
+	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
+
+	err := os.Mkdir(logDir, 0755)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	err = os.Mkdir(outDir, 0755)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+
+	fname := fmt.Sprintf("%s/%s.log", outDir, t.Format("2006-01-02 15:04:05 MST"))
+	logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	u.logWriter = bufio.NewWriter(logFile)
+	defer u.logWriter.Flush()
+
+	for {
+		select {
+		case msg := <-logFeed:
+			u.logWriter.WriteString(msg)
+		}
+	}
+}
+
+func tabHandler(c socket.Socket, msg string) string {
+	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
+		id := m[1:]
+		if u := c.QueryUser(id); u != id {
+			return fmt.Sprintf("@%s,", u)
+		}
+
+		return m
+	})
 }

@@ -130,34 +130,29 @@ func (s *sock) Start() {
 		if err != nil {
 			panic(err)
 		}
-		defer s.CloseAll()
-		defer s.stopTor()
 
 		s.responseHandler()
 	}()
 }
 
-func (s *sock) newDialer() (websocket.Dialer, error) {
-	// Set handshake timeout to 15 mins.
-	timeout, err := time.ParseDuration("15m")
-	if err != nil {
-		return websocket.Dialer{}, err
+func (s *sock) CloseAll() {
+	s.closeSocket()
+	s.stopTor()
+}
+
+func (s *sock) closeSocket() {
+	if s.Conn == nil {
+		return
 	}
 
-	wd := websocket.Dialer{
-		EnableCompression: true,
-		HandshakeTimeout:  timeout,
-	}
-	if s.tor != nil {
-		// Dial socket through Tor proxy context.
-		wd.NetDialContext = s.torCtx
-	}
-
-	return wd, nil
+	// For synchronicity.
+	conn := s.Conn
+	s.Conn = nil
+	conn.Close()
 }
 
 func (s *sock) connect() (*websocket.Conn, error) {
-	s.CloseAll()
+	s.closeSocket()
 
 	s.ClientMsg("Opening socket...")
 
@@ -188,6 +183,25 @@ func (s *sock) connect() (*websocket.Conn, error) {
 	return conn, nil
 }
 
+func (s *sock) newDialer() (websocket.Dialer, error) {
+	// Set handshake timeout to 15 mins.
+	timeout, err := time.ParseDuration("15m")
+	if err != nil {
+		return websocket.Dialer{}, err
+	}
+
+	wd := websocket.Dialer{
+		EnableCompression: true,
+		HandshakeTimeout:  timeout,
+	}
+	if s.tor != nil {
+		// Dial socket through Tor proxy context.
+		wd.NetDialContext = s.torCtx
+	}
+
+	return wd, nil
+}
+
 func (s *sock) write(msg []byte) error {
 	err := s.WriteMessage(websocket.TextMessage, msg)
 	if err != nil {
@@ -196,15 +210,4 @@ func (s *sock) write(msg []byte) error {
 	}
 
 	return nil
-}
-
-func (s *sock) CloseAll() bool {
-	if s.Conn == nil {
-		return false
-	}
-
-	s.Close()
-	s.Conn = nil
-
-	return true
 }

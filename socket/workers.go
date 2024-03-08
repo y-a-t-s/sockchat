@@ -26,13 +26,13 @@ type serverResponse struct {
 }
 
 func (s *sock) fetch() {
-	for {
-		if s.Conn == nil {
-			s.connect()
-		}
+	if s.Conn == nil {
+		s.connect()
+	}
 
+	for {
 		_, msg, err := s.ReadMessage()
-		if err != nil {
+		if err != nil && s.Conn != nil {
 			s.ClientMsg("Failed to read from socket.\n")
 			s.connect()
 		}
@@ -126,5 +126,6 @@ func (s *sock) responseHandler() {
 		if len(sm.Users) > 0 {
 			parseResponse(sm.Users, &User{})
 		}
+
 	}
 }

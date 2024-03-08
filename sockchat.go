@@ -19,5 +19,7 @@ func main() {
 		log.Fatal(err)
 	}
 	sock.Start()
+
 	tui.InitUI(sock, cfg)
+	sock.CloseAll()
 }
