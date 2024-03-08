@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"html"
@@ -18,14 +19,16 @@ import (
 	"github.com/rivo/tview"
 )
 
-type UI struct {
+type ui struct {
 	App      *tview.Application
 	MainView *tview.Flex
 	ChatView *tview.TextView
 	InputBox *tview.InputField
+
+	logWriter *bufio.Writer
 }
 
-func InitUI(c socket.Socket, cfg config.Config) UI {
+func InitUI(c socket.Socket, cfg config.Config) {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -43,12 +46,16 @@ func InitUI(c socket.Socket, cfg config.Config) UI {
 		SetFieldWidth(0).
 		SetLabel("> ")
 
+	ui := ui{app, flex, chatView, msgBox, nil}
+
 	chatView.SetBorder(false)
 	chatView.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyBacktab:
 			flex.AddItem(msgBox, 1, 1, true)
 			app.SetFocus(flex)
+		case tcell.KeyCtrlC:
+			ui.cleanup()
 		}
 	})
 
@@ -66,7 +73,7 @@ func InitUI(c socket.Socket, cfg config.Config) UI {
 			flex.RemoveItem(msgBox)
 			app.SetFocus(chatView)
 		case tcell.KeyCtrlC:
-			app.Stop()
+			ui.cleanup()
 		}
 	})
 
@@ -77,10 +84,9 @@ func InitUI(c socket.Socket, cfg config.Config) UI {
 
 	app.SetRoot(flex, true).SetFocus(flex)
 
-	ui := UI{app, flex, chatView, msgBox}
 	go ui.incomingHandler(c)
-
-	return ui
+	app.Run()
+	ui.cleanup()
 }
 
 func tabHandler(c socket.Socket, msg string) string {
@@ -94,33 +100,50 @@ func tabHandler(c socket.Socket, msg string) string {
 	})
 }
 
-func (ui *UI) incomingHandler(c socket.Socket) {
+func (u *ui) cleanup() {
+	if u.logWriter != nil {
+		u.logWriter.Flush()
+	}
+	u.App.Stop()
+}
+
+func (u *ui) logger(logFeed chan string) error {
+	const logDir = "logs"
+	t := time.Now()
+	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
+
+	err := os.Mkdir(logDir, 0755)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	err = os.Mkdir(outDir, 0755)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+
+	fname := fmt.Sprintf("%s/%s.log", outDir, t.Format("2006-01-02 15:04:05 MST"))
+	logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	u.logWriter = bufio.NewWriter(logFile)
+	defer u.logWriter.Flush()
+
+	for {
+		select {
+		case msg := <-logFeed:
+			u.logWriter.WriteString(msg)
+		}
+	}
+}
+
+func (u *ui) incomingHandler(c socket.Socket) {
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
 	}
-
-	logFeed := make(chan string, 128)
-	go func() {
-		const logDir = "logs"
-		err := os.Mkdir(logDir, 0755)
-		if err != nil && !errors.Is(err, fs.ErrExist) {
-			panic(err)
-		}
-		fname := fmt.Sprintf("%s/%s.log", logDir, time.Now().Format("Jan 2 15:04:05 2006 MST"))
-		logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			panic(err)
-		}
-		defer logFile.Close()
-
-		for {
-			select {
-			case msg := <-logFeed:
-				logFile.WriteString(msg)
-			}
-		}
-	}()
 
 	var mentionRE *regexp.Regexp
 	// IDs of any messages that mention the user. Used for message highlighting.
@@ -137,9 +160,12 @@ func (ui *UI) incomingHandler(c socket.Socket) {
 		if mentionRE.MatchString(msg.MessageRaw) {
 			beeep.Notify("New mention", html.UnescapeString(msg.MessageRaw), "")
 			mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-			ui.ChatView.Highlight(mentionIDs...)
+			u.ChatView.Highlight(mentionIDs...)
 		}
 	}
+
+	logFeed := make(chan string, 128)
+	go u.logger(logFeed)
 
 	var prev *socket.ChatMessage
 	for {
@@ -155,10 +181,10 @@ func (ui *UI) incomingHandler(c socket.Socket) {
 				msg.Author.Username, msg.Author.ID, unEsc)
 
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(ui.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+			fmt.Fprintf(u.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
 				msg.Author.GetColor(), timestamp, msg.Author.GetUserString(),
 				msg.MessageID, unEsc)
-			ui.ChatView.ScrollToEnd()
+			u.ChatView.ScrollToEnd()
 			mentionHandler(&msg)
 		}
 
