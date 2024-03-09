@@ -8,20 +8,11 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
-  workflow_dispatch:
-    inputs:
-      chosen-os:
-        required: true
-        type: choice
-        options:
-        - ubuntu-latest
-        - macos-latest
-        - windows-latest
 
 jobs:
 
   build:
-    runs-on: "${{ inputs.chosen-os }}"
+    runs-on: [ubuntu-latest, macos-latest, windows-latest]
     steps:
     - uses: actions/checkout@v3
 
