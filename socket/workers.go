@@ -2,7 +2,9 @@ package socket
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -25,66 +27,73 @@ type serverResponse struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (s *sock) fetch() {
-	if s.Conn == nil {
-		s.connect()
-	}
-
+func (s *sock) fetch(ctx context.Context) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if s.Conn == nil {
+			s.connect(ctx)
+		}
+
 		_, msg, err := s.ReadMessage()
-		if err != nil && s.Conn != nil {
+		if err != nil {
 			s.ClientMsg("Failed to read from socket.\n")
-			s.connect()
+			s.connect(ctx)
 		}
 
 		s.incoming <- msg
 	}
 }
 
-func (s *sock) msgWriter() {
+func (s *sock) msgWriter(ctx context.Context) {
 	joinRE := regexp.MustCompile(`^/join (\d)+$`)
 	for {
-		// Trim unnecessary whitespace.
-		msg := bytes.TrimSpace(<-s.outgoing)
-		// Ignore empty messages.
-		if len(msg) == 0 {
-			continue
-		}
-
-		// Update selected room if /join message was sent.
-		if room := joinRE.FindSubmatch(msg); room != nil {
-			tmp, err := strconv.Atoi(string(room[1]))
-			if err != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-s.outgoing:
+			// Trim unnecessary whitespace.
+			msg = bytes.TrimSpace(msg)
+			// Ignore empty messages.
+			if len(msg) == 0 {
 				continue
 			}
-			s.room = uint(tmp)
-		}
 
-		s.write(msg)
+			// Update selected room if /join message was sent.
+			if room := joinRE.FindSubmatch(msg); room != nil {
+				tmp, err := strconv.Atoi(string(room[1]))
+				if err != nil {
+					continue
+				}
+				s.room = uint(tmp)
+			}
+
+			s.write(msg)
+		}
 	}
 }
 
-func (s *sock) responseHandler() {
-	go s.fetch()
-	go s.userHandler()
-	if !s.readOnly {
-		go s.msgWriter()
-	}
-
+func (s *sock) responseHandler(ctx context.Context) error {
 	// out has to be passed as a pointer for the json Decode to work.
-	parseResponse := func(b []byte, out interface{}) {
+	parseResponse := func(b []byte, out interface{}) error {
 		jd := json.NewDecoder(bytes.NewReader(b))
 
 		switch out.(type) {
 		case *ChatMessage:
 			if _, err := jd.Token(); err != nil {
-				log.Fatal(err)
+				return err
 			}
 		}
 
+		errs := []error{nil}
 		for jd.More() {
 			if err := jd.Decode(out); err != nil {
 				log.Printf("Failed to parse data from server.\nError: %v", err)
+				errs = append(errs, err)
 				continue
 			}
 
@@ -97,27 +106,25 @@ func (s *sock) responseHandler() {
 				s.users <- *(out.(*User))
 			}
 		}
+
+		return errors.Join(errs...)
 	}
 
-	for {
-		msg := <-s.incoming
+	process := func(msg []byte) error {
 		if len(msg) == 0 {
-			continue
+			return errors.New("Empty message from server.")
 		}
 
-		// Error messages from the server usually aren't encoded.
+		// Server sometimes sends plaintext messages to client.
+		// This typically happens when it sends error messages.
 		if !json.Valid(msg) {
 			s.ClientMsg(string(msg))
-			continue
 		}
 
 		var sm serverResponse
 		if err := json.Unmarshal(msg, &sm); err != nil {
-			s.ClientMsg(
-				fmt.Sprintf("Failed to parse server response.\nResponse: %s\nError: %v",
-					msg,
-					err))
-			continue
+			s.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
+			return err
 		}
 
 		if len(sm.Messages) > 0 {
@@ -127,5 +134,18 @@ func (s *sock) responseHandler() {
 			parseResponse(sm.Users, &User{})
 		}
 
+		return nil
+	}
+
+	errs := []error{nil}
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Join(errs...)
+		case msg := <-s.incoming:
+			if err := process(msg); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 }

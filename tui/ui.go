@@ -1,17 +1,15 @@
 package tui
 
 import (
-	"bufio"
-	"errors"
+	"context"
 	"fmt"
 	"html"
-	"io/fs"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"y-a-t-s/sockchat/config"
+	"y-a-t-s/sockchat/services"
 	"y-a-t-s/sockchat/socket"
 
 	"github.com/gdamore/tcell/v2"
@@ -20,15 +18,15 @@ import (
 )
 
 type ui struct {
+	services.Logger
+
 	App      *tview.Application
 	MainView *tview.Flex
 	ChatView *tview.TextView
 	InputBox *tview.InputField
-
-	logWriter *bufio.Writer
 }
 
-func InitUI(c socket.Socket, cfg config.Config) {
+func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l services.Logger) {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -46,7 +44,8 @@ func InitUI(c socket.Socket, cfg config.Config) {
 		SetFieldWidth(0).
 		SetLabel("> ")
 
-	ui := ui{app, flex, chatView, msgBox, nil}
+	u := ui{l, app, flex, chatView, msgBox}
+	defer app.Stop()
 
 	chatView.SetBorder(false)
 	chatView.SetDoneFunc(func(key tcell.Key) {
@@ -55,7 +54,7 @@ func InitUI(c socket.Socket, cfg config.Config) {
 			flex.AddItem(msgBox, 1, 1, true)
 			app.SetFocus(flex)
 		case tcell.KeyCtrlC:
-			ui.cleanup()
+			app.Stop()
 		}
 	})
 
@@ -73,7 +72,7 @@ func InitUI(c socket.Socket, cfg config.Config) {
 			flex.RemoveItem(msgBox)
 			app.SetFocus(chatView)
 		case tcell.KeyCtrlC:
-			ui.cleanup()
+			app.Stop()
 		}
 	})
 
@@ -84,19 +83,11 @@ func InitUI(c socket.Socket, cfg config.Config) {
 
 	app.SetRoot(flex, true).SetFocus(flex)
 
-	go ui.incomingHandler(c)
+	go u.incomingHandler(ctx, c)
 	app.Run()
-	ui.cleanup()
 }
 
-func (u *ui) cleanup() {
-	if u.logWriter != nil {
-		u.logWriter.Flush()
-	}
-	u.App.Stop()
-}
-
-func (u *ui) incomingHandler(c socket.Socket) {
+func (u *ui) incomingHandler(ctx context.Context, c socket.Socket) {
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
@@ -121,63 +112,50 @@ func (u *ui) incomingHandler(c socket.Socket) {
 		}
 	}
 
-	logFeed := make(chan string, 128)
-	go u.logger(logFeed)
+	// Returns strings for UI and Logger respectively.
+	formatMsg := func(msg *socket.ChatMessage) (string, string) {
+		unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
+
+		h, m, s := time.Unix(msg.MessageDate, 0).Clock()
+		// Format timestamp with user's color.
+		timestamp := fmt.Sprintf("%0.2d:%0.2d:%0.2d", h, m, s)
+
+		// Format chat message, preceded by the sender's username and ID.
+		uiStr := fmt.Sprintf("[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+			msg.Author.GetColor(), timestamp, msg.Author.GetUserString(),
+			msg.MessageID, unEsc)
+
+		// Format log message. Similar to ui formatting, but with
+		// extra brackets for readability and no style tags.
+		logStr := fmt.Sprintf("[%s] [%s (#%d)]: %s\n", timestamp,
+			msg.Author.Username, msg.Author.ID, unEsc)
+
+		return uiStr, logStr
+	}
 
 	var prev *socket.ChatMessage
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		msg := c.GetIncoming()
 		if prev == nil || msg != *prev {
-			unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
+			msgStr, logStr := formatMsg(&msg)
 
-			h, m, s := time.Unix(msg.MessageDate, 0).Clock()
-			// Format timestamp with user's color.
-			timestamp := fmt.Sprintf("%0.2d:%0.2d:%0.2d", h, m, s)
-
-			logFeed <- fmt.Sprintf("[%s] [%s (#%d)]: %s\n", timestamp,
-				msg.Author.Username, msg.Author.ID, unEsc)
+			if u.Logger != nil {
+				u.Log(logStr)
+			}
 
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(u.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
-				msg.Author.GetColor(), timestamp, msg.Author.GetUserString(),
-				msg.MessageID, unEsc)
+			fmt.Fprint(u.ChatView, msgStr)
 			u.ChatView.ScrollToEnd()
 			mentionHandler(&msg)
 		}
 
 		prev = &msg
-	}
-}
-
-func (u *ui) logger(logFeed chan string) error {
-	const logDir = "logs"
-	t := time.Now()
-	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
-
-	err := os.Mkdir(logDir, 0755)
-	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	err = os.Mkdir(outDir, 0755)
-	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-
-	fname := fmt.Sprintf("%s/%s.log", outDir, t.Format("2006-01-02 15:04:05 MST"))
-	logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-
-	u.logWriter = bufio.NewWriter(logFile)
-	defer u.logWriter.Flush()
-
-	for {
-		select {
-		case msg := <-logFeed:
-			u.logWriter.WriteString(msg)
-		}
 	}
 }
 

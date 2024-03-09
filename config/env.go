@@ -19,6 +19,7 @@ func newEnvMap() envMap {
 		"SC_PORT": "9443",
 		// If SC_HOST is a .onion domain, this is ignored.
 		// Useful for clearnet-over-tor.
+		"SC_LOGGER":  "0",
 		"SC_USE_TOR": "0",
 	}
 }

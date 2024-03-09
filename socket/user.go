@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -55,7 +56,7 @@ func (s *sock) QueryUser(id string) string {
 	return id
 }
 
-func (s *sock) userHandler() {
+func (s *sock) userHandler(ctx context.Context) {
 	clientId := uint32(0)
 	if idStr := os.Getenv("SC_USER_ID"); idStr != "" {
 		id, err := strconv.Atoi(idStr)

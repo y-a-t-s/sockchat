@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -19,7 +20,7 @@ type Socket interface {
 	GetIncoming() ChatMessage
 	QueryUser(id string) string
 	Send(msg interface{}) error
-	Start()
+	Start(ctx context.Context)
 }
 
 type channels struct {
@@ -43,7 +44,7 @@ type sock struct {
 	url        url.URL
 }
 
-func NewSocket(cfg config.Config) (*sock, error) {
+func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 	parseHost := func() (*url.URL, error) {
 		// Provided host might start with the protocol or have a trailing /, so isolate the domain.
 		tmp := regexp.MustCompile(`(https?://)?([\w.]+)/?`).FindStringSubmatch(cfg.Host)
@@ -65,7 +66,7 @@ func NewSocket(cfg config.Config) (*sock, error) {
 	if err != nil {
 		return nil, err
 	}
-	sock := &sock{
+	s := &sock{
 		Conn:    nil,
 		torInst: torInst{},
 		channels: channels{
@@ -82,12 +83,12 @@ func NewSocket(cfg config.Config) (*sock, error) {
 		url:        *hostUrl,
 	}
 
-	if cfg.UseTor || strings.HasSuffix(sock.url.Hostname(), ".onion") {
-		sock.tor = startTor()
-		sock.getTorCtx()
+	if cfg.UseTor || strings.HasSuffix(s.url.Hostname(), ".onion") {
+		s.tor = startTor()
+		s.getTorCtx()
 	}
 
-	return sock, nil
+	return s, nil
 }
 
 func (s *sock) ClientMsg(msg string) {
@@ -124,15 +125,21 @@ func (s *sock) Send(msg interface{}) error {
 	return nil
 }
 
-func (s *sock) Start() {
-	go func() {
-		_, err := s.connect()
-		if err != nil {
-			panic(err)
-		}
+func (s *sock) Start(ctx context.Context) {
+	_, err := s.connect(ctx)
+	if err != nil {
+		panic(err)
+	}
 
-		s.responseHandler()
-	}()
+	closef := context.AfterFunc(ctx, s.CloseAll)
+	defer closef()
+
+	go s.fetch(ctx)
+	go s.userHandler(ctx)
+	if !s.readOnly {
+		go s.msgWriter(ctx)
+	}
+	s.responseHandler(ctx)
 }
 
 func (s *sock) CloseAll() {
@@ -151,7 +158,14 @@ func (s *sock) closeSocket() {
 	conn.Close()
 }
 
-func (s *sock) connect() (*websocket.Conn, error) {
+func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Close if necessary before reconnecting.
 	s.closeSocket()
 
 	s.ClientMsg("Opening socket...")
@@ -166,12 +180,11 @@ func (s *sock) connect() (*websocket.Conn, error) {
 	})
 	if err != nil {
 		s.ClientMsg("Failed to connect. Retrying...")
-		return s.connect()
+		return s.connect(ctx)
 	}
 	s.ClientMsg("Connected.\n")
 
 	s.Conn = conn
-	// Let caller defer close.
 
 	// Send /join message for desired room.
 	// Writing directly to avoid requiring the msgWriter routine, which may not be running.
@@ -194,6 +207,7 @@ func (s *sock) newDialer() (websocket.Dialer, error) {
 		EnableCompression: true,
 		HandshakeTimeout:  timeout,
 	}
+	// s.tor should only be non-nil when Tor is running.
 	if s.tor != nil {
 		// Dial socket through Tor proxy context.
 		wd.NetDialContext = s.torCtx
@@ -203,6 +217,10 @@ func (s *sock) newDialer() (websocket.Dialer, error) {
 }
 
 func (s *sock) write(msg []byte) error {
+	if s.Conn == nil {
+		return errors.New("Socket connection is nil.")
+	}
+
 	err := s.WriteMessage(websocket.TextMessage, msg)
 	if err != nil {
 		s.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))

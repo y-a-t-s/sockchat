@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Host     string
 	Port     uint
+	Logger   bool
 	ReadOnly bool
 	Room     uint
 	UseTor   bool
@@ -30,6 +31,12 @@ func ParseArgs() (Config, error) {
 
 	flags := flag.NewFlagSet("SockChat", flag.ContinueOnError)
 	flags.StringVar(&cfg.Host, "host", os.Getenv("SC_HOST"), "Specify hostname to connect to.")
+	flags.BoolVar(&cfg.Logger, "log", func() bool {
+		if os.Getenv("SC_LOGGER") == "1" {
+			return true
+		}
+		return false
+	}(), "Enable chat logger.")
 	flags.UintVar(&cfg.Port, "port", 0, "Specify outgoing socket port.")
 	flags.BoolVar(&cfg.ReadOnly, "ro", false, "Read-only (lurker) mode.")
 	flags.UintVar(&cfg.Room, "room", 0, "Room to join by default.")
@@ -37,7 +44,6 @@ func ParseArgs() (Config, error) {
 		if os.Getenv("SC_USE_TOR") == "1" {
 			return true
 		}
-
 		return false
 	}(), "Connect through Tor network.")
 	flags.Parse(os.Args[1:])
