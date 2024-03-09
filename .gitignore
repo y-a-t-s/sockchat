@@ -1,12 +1,15 @@
 .*
 !.gitignore
-*.log
+
 *.json
-tmp/
+*.log
 
 data-dir-*/
 logs/
+tmp/
 
 GPATH
 GRTAGS
 GTAGS
+
+sockchat

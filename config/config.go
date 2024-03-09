@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 )
@@ -21,8 +22,14 @@ type Config struct {
 func LoadConfig() (Config, error) {
 	var cfg Config
 
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return cfg, err
+	}
+
+	fname := fmt.Sprintf("%s/sockchat/config.json", cfgDir)
 	// Open .env file for RW.
-	f, err := os.OpenFile("config.json", os.O_APPEND|os.O_RDWR, 0644)
+	f, err := os.OpenFile(fname, os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			cfg = newConfig()
@@ -55,7 +62,17 @@ func newConfig() Config {
 }
 
 func writeConfig(cfg Config) error {
-	f, err := os.OpenFile("config.json", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	err = os.Mkdir(fmt.Sprintf("%s/sockchat", cfgDir), 0755)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+
+	fname := fmt.Sprintf("%s/sockchat/config.json", cfgDir)
+	f, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
@@ -67,6 +84,9 @@ func writeConfig(cfg Config) error {
 	}
 
 	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	if _, err := f.WriteString("\n"); err != nil {
 		return err
 	}
 

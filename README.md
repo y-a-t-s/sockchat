@@ -4,17 +4,15 @@ A KF chat client.
 
 ## Usage
 
-1. `cd` to the main module directory (i.e. `sockchat/`). If you don't know how, this program probably isn't for you.
+1. `sockchat "$COOKIES"` where `$COOKIES` is the raw cookies value from the site's header.
 
-2. `go run . "$COOKIES"` where `$COOKIES` is the raw cookies value from the site's header.
-
-Use the network tab in your browser's dev tools to find the `chat.ws` connection. Your cookies are found in the request header. It looks a little something like this:
+Use the network tab in your browser's dev tools to find the `chat.ws` connection on the forum's homepage. Your cookies are found in the request header. It looks a little something like this:
 
 ``` sh
 xf_tfa_trust=VALUE; xf_user=VALUE; xf_emoji_usage=VALUE; xf_csrf=VALUE; xf_session=VALUE
 ```
 
-If the connection fails, confirm the URL in your `.env` file is up-to-date.
+If the connection fails, confirm the URL in your `config.json` file is up-to-date.
 
 ## Features
 

@@ -21,11 +21,16 @@ type logger struct {
 }
 
 func NewLogger() (Logger, error) {
-	const logDir = "logs"
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	logDir := fmt.Sprintf("%s/sockchat/logs", cfgDir)
+
 	t := time.Now()
 	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
 
-	err := os.Mkdir(logDir, 0755)
+	err = os.Mkdir(logDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
