@@ -1,6 +1,7 @@
 .*
 !.gitignore
 *.log
+*.json
 tmp/
 
 data-dir-*/

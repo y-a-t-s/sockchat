@@ -10,7 +10,6 @@ import (
 	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/services"
 	"y-a-t-s/sockchat/socket"
-	"y-a-t-s/sockchat/tui"
 )
 
 func main() {
@@ -31,12 +30,13 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
+	context.AfterFunc(ctx, sock.CloseAll)
 
 	var wg sync.WaitGroup
 
 	var l services.Logger
 	if cfg.Logger {
-		l, err = services.NewLogger(ctx)
+		l, err = services.NewLogger()
 		if err != nil {
 			log.Panic(err)
 		}
@@ -57,7 +57,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		tui.InitUI(ctx, sock, cfg, l)
+		services.InitUI(ctx, sock, cfg, l)
 	}()
 	wg.Wait()
 	cancel()

@@ -20,7 +20,7 @@ type logger struct {
 	feed chan string
 }
 
-func NewLogger(ctx context.Context) (Logger, error) {
+func NewLogger() (Logger, error) {
 	const logDir = "logs"
 	t := time.Now()
 	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))

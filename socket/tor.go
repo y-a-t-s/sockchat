@@ -2,58 +2,65 @@ package socket
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
 
 	"github.com/cretz/bine/tor"
 )
 
-type ctx func(ctx context.Context, network string, addr string) (net.Conn, error)
+type torProxy func(ctx context.Context, network string, addr string) (net.Conn, error)
 
 type torInst struct {
-	tor    *tor.Tor
-	dialer *tor.Dialer
-	torCtx ctx
+	*tor.Tor
+	proxy       torProxy
+	proxyDialer *tor.Dialer
 }
 
-func startTor() *tor.Tor {
-	log.Print("Connecting to Tor network...")
+func (t *torInst) startTor(ctx context.Context) error {
+	log.Println("Connecting to Tor network...")
 
-	ti, err := tor.Start(nil, nil)
+	ti, err := tor.Start(ctx, nil)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	t.Tor = ti
 
-	return ti
-}
-
-func (t *torInst) stopTor() *torInst {
-	if t.tor == nil {
-		return t
-	}
-
-	log.Print("Stopping Tor.")
-
-	t.tor.Close()
-
-	t.tor = nil
-	t.dialer = nil
-	t.torCtx = nil
-
-	return t
-}
-
-func (t *torInst) getTorCtx() ctx {
-	if t.tor == nil {
-		t.tor = startTor()
-	}
-
-	td, err := t.tor.Dialer(context.Background(), nil)
+	td, err := t.Dialer(ctx, nil)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	t.dialer = td
+	t.proxyDialer = td
+	t.proxy = td.DialContext
 
-	t.torCtx = td.DialContext
-	return t.torCtx
+	return nil
+}
+
+func (t *torInst) stopTor() {
+	if t.Tor == nil {
+		return
+	}
+
+	log.Println("Stopping Tor.")
+
+	t.Close()
+
+	t.Tor = nil
+	t.proxyDialer = nil
+	t.proxy = nil
+}
+
+func (t *torInst) getTorProxy(ctx context.Context) (torProxy, error) {
+	if t.Tor == nil {
+		return nil, errors.New("Not connected to Tor network.")
+	}
+
+	td, err := t.Dialer(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	t.proxyDialer = td
+
+	t.proxy = td.DialContext
+	return t.proxy, nil
 }

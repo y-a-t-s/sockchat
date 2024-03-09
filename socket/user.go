@@ -3,8 +3,6 @@ package socket
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 )
 
 type User struct {
@@ -57,24 +55,12 @@ func (s *sock) QueryUser(id string) string {
 }
 
 func (s *sock) userHandler(ctx context.Context) {
-	clientId := uint32(0)
-	if idStr := os.Getenv("SC_USER_ID"); idStr != "" {
-		id, err := strconv.Atoi(idStr)
-		if err != nil {
-			panic(err)
-		}
-
-		clientId = uint32(id)
-	}
-
 	userMap := make(map[string]string)
 	for {
 		select {
 		case user := <-s.users:
-			if clientId != 0 && user.ID == clientId {
+			if s.clientName == "" && user.ID == uint32(s.clientID) {
 				s.clientName = user.Username
-				// Probably helps efficiency down the line.
-				clientId = 0
 			}
 			userMap[fmt.Sprint(user.ID)] = user.Username
 		case query := <-s.userQuery:

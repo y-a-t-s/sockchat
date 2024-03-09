@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"y-a-t-s/sockchat/config"
-	"y-a-t-s/sockchat/services"
 	"y-a-t-s/sockchat/socket"
 
 	"github.com/gdamore/tcell/v2"
@@ -18,7 +17,7 @@ import (
 )
 
 type ui struct {
-	services.Logger
+	Logger
 
 	App      *tview.Application
 	MainView *tview.Flex
@@ -26,7 +25,7 @@ type ui struct {
 	InputBox *tview.InputField
 }
 
-func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l services.Logger) {
+func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l Logger) {
 	app := tview.NewApplication()
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 

@@ -16,6 +16,7 @@ import (
 
 type Socket interface {
 	ClientMsg(msg string)
+	CloseAll()
 	GetClientName() string
 	GetIncoming() ChatMessage
 	QueryUser(id string) string
@@ -37,6 +38,7 @@ type sock struct {
 	torInst
 	channels
 
+	clientID   int
 	clientName string
 	cookies    []string
 	readOnly   bool
@@ -76,6 +78,7 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
+		clientID:   cfg.UserID,
 		clientName: "",
 		cookies:    cfg.Args,
 		readOnly:   cfg.ReadOnly,
@@ -83,9 +86,10 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		url:        *hostUrl,
 	}
 
-	if cfg.UseTor || strings.HasSuffix(s.url.Hostname(), ".onion") {
-		s.tor = startTor()
-		s.getTorCtx()
+	if cfg.Tor || strings.HasSuffix(s.url.Hostname(), ".onion") {
+		if err := s.startTor(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	return s, nil
@@ -131,9 +135,6 @@ func (s *sock) Start(ctx context.Context) {
 		panic(err)
 	}
 
-	closef := context.AfterFunc(ctx, s.CloseAll)
-	defer closef()
-
 	go s.fetch(ctx)
 	go s.userHandler(ctx)
 	if !s.readOnly {
@@ -143,19 +144,11 @@ func (s *sock) Start(ctx context.Context) {
 }
 
 func (s *sock) CloseAll() {
-	s.closeSocket()
-	s.stopTor()
-}
-
-func (s *sock) closeSocket() {
-	if s.Conn == nil {
-		return
+	if s.Conn != nil {
+		s.Close()
+		s.Conn = nil
 	}
-
-	// For synchronicity.
-	conn := s.Conn
-	s.Conn = nil
-	conn.Close()
+	s.stopTor()
 }
 
 func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
@@ -166,11 +159,14 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	}
 
 	// Close if necessary before reconnecting.
-	s.closeSocket()
+	if s.Conn != nil {
+		s.Close()
+		s.Conn = nil
+	}
 
 	s.ClientMsg("Opening socket...")
 
-	dialer, err := s.newDialer()
+	dialer, err := s.newDialer(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +192,7 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	return conn, nil
 }
 
-func (s *sock) newDialer() (websocket.Dialer, error) {
+func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 	// Set handshake timeout to 15 mins.
 	timeout, err := time.ParseDuration("15m")
 	if err != nil {
@@ -207,10 +203,13 @@ func (s *sock) newDialer() (websocket.Dialer, error) {
 		EnableCompression: true,
 		HandshakeTimeout:  timeout,
 	}
-	// s.tor should only be non-nil when Tor is running.
-	if s.tor != nil {
+	// s.Tor should only be non-nil when Tor is running.
+	if s.Tor != nil {
+		if s.proxy == nil {
+			s.getTorProxy(ctx)
+		}
 		// Dial socket through Tor proxy context.
-		wd.NetDialContext = s.torCtx
+		wd.NetDialContext = s.proxy
 	}
 
 	return wd, nil
