@@ -7,7 +7,6 @@ require (
 	github.com/gdamore/tcell/v2 v2.7.0
 	github.com/gen2brain/beeep v0.0.0-20240112042604-c7bb2cd88fea
 	github.com/gorilla/websocket v1.5.1
-	github.com/joho/godotenv v1.5.1
 	github.com/rivo/tview v0.0.0-20240115061330-ed5968603a5f
 )
 
