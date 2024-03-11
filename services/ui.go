@@ -17,7 +17,7 @@ import (
 )
 
 type ui struct {
-	Logger
+	l Logger
 
 	App      *tview.Application
 	MainView *tview.Flex
@@ -57,6 +57,18 @@ func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l Logger) {
 		}
 	})
 
+	tabRE := regexp.MustCompile(`@(\d+)`)
+	tabHandler := func(msg string) string {
+		return tabRE.ReplaceAllStringFunc(msg, func(m string) string {
+			id := m[1:]
+			if u := c.QueryUser(id); u != id {
+				return fmt.Sprintf("@%s,", u)
+			}
+
+			return m
+		})
+	}
+
 	msgBox.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
@@ -66,7 +78,7 @@ func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l Logger) {
 			msgBox.SetText("")
 		case tcell.KeyTab:
 			msg := msgBox.GetText()
-			msgBox.SetText(tabHandler(c, msg))
+			msgBox.SetText(tabHandler(msg))
 		case tcell.KeyBacktab:
 			flex.RemoveItem(msgBox)
 			app.SetFocus(chatView)
@@ -111,27 +123,6 @@ func (u *ui) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 	}
 
-	// Returns strings for UI and Logger respectively.
-	formatMsg := func(msg *socket.ChatMessage) (string, string) {
-		unEsc := escapeTags(html.UnescapeString(msg.MessageRaw))
-
-		h, m, s := time.Unix(msg.MessageDate, 0).Clock()
-		// Format timestamp with user's color.
-		timestamp := fmt.Sprintf("%0.2d:%0.2d:%0.2d", h, m, s)
-
-		// Format chat message, preceded by the sender's username and ID.
-		uiStr := fmt.Sprintf("[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
-			msg.Author.GetColor(), timestamp, msg.Author.GetUserString(),
-			msg.MessageID, unEsc)
-
-		// Format log message. Similar to ui formatting, but with
-		// extra brackets for readability and no style tags.
-		logStr := fmt.Sprintf("[%s] [%s (#%d)]: %s\n", timestamp,
-			msg.Author.Username, msg.Author.ID, unEsc)
-
-		return uiStr, logStr
-	}
-
 	var prev *socket.ChatMessage
 	for {
 		select {
@@ -142,29 +133,23 @@ func (u *ui) incomingHandler(ctx context.Context, c socket.Socket) {
 
 		msg := c.GetIncoming()
 		if prev == nil || msg != *prev {
-			msgStr, logStr := formatMsg(&msg)
+			timestamp := time.Unix(msg.MessageDate, 0)
+			msgStr := html.UnescapeString(msg.MessageRaw)
 
-			if u.Logger != nil {
-				u.Log(logStr)
+			if u.l != nil {
+				u.l.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
+					timestamp.Format("2006-01-02 15:04:05 MST"),
+					msg.Author.Username, msg.Author.ID, msgStr))
 			}
 
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprint(u.ChatView, msgStr)
+			fmt.Fprintf(u.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+				msg.Author.GetColor(), timestamp.Format("15:04:05"),
+				msg.Author.GetUserString(), msg.MessageID, escapeTags(msgStr))
 			u.ChatView.ScrollToEnd()
 			mentionHandler(&msg)
 		}
 
 		prev = &msg
 	}
-}
-
-func tabHandler(c socket.Socket, msg string) string {
-	return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
-		id := m[1:]
-		if u := c.QueryUser(id); u != id {
-			return fmt.Sprintf("@%s,", u)
-		}
-
-		return m
-	})
 }
