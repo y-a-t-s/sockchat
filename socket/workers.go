@@ -9,6 +9,8 @@ import (
 	"log"
 	"regexp"
 	"strconv"
+
+	"github.com/gorilla/websocket"
 )
 
 type ChatMessage struct {
@@ -27,7 +29,7 @@ type serverResponse struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (s *sock) fetch(ctx context.Context) {
+func (s *sock) msgReader(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -72,9 +74,21 @@ func (s *sock) msgWriter(ctx context.Context) {
 				s.room = uint(tmp)
 			}
 
-			s.write(msg)
+			if err := s.write(msg); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+				// Send it back to the queue to try again.
+				s.outgoing <- msg
+			}
 		}
 	}
+}
+
+func (s *sock) startWorkers(ctx context.Context) error {
+	go s.msgReader(ctx)
+	go s.userHandler(ctx)
+	if !s.readOnly {
+		go s.msgWriter(ctx)
+	}
+	return s.responseHandler(ctx)
 }
 
 func (s *sock) responseHandler(ctx context.Context) error {

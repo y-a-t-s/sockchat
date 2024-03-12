@@ -16,12 +16,12 @@ import (
 
 type Socket interface {
 	ClientMsg(msg string)
+	ClientName() (string, error)
 	CloseAll()
-	GetClientName() string
-	GetIncoming() ChatMessage
+	IncomingMsg() ChatMessage
 	QueryUser(id string) string
 	Send(msg interface{}) error
-	Start(ctx context.Context)
+	Start(ctx context.Context) error
 }
 
 type channels struct {
@@ -35,7 +35,7 @@ type channels struct {
 
 type sock struct {
 	*websocket.Conn
-	torInst
+	torConn
 	channels
 
 	clientID   int
@@ -70,7 +70,7 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 	}
 	s := &sock{
 		Conn:    nil,
-		torInst: torInst{},
+		torConn: torConn{},
 		channels: channels{
 			messages:  make(chan ChatMessage, 1024),
 			outgoing:  make(chan []byte, 16),
@@ -107,11 +107,23 @@ func (s *sock) ClientMsg(msg string) {
 	}
 }
 
-func (s *sock) GetClientName() string {
-	return s.clientName
+func (s *sock) ClientName() (string, error) {
+	if s.clientName == "" {
+		return "", errors.New("Client's ID does not have an entry in the user table yet.")
+	}
+
+	return s.clientName, nil
 }
 
-func (s *sock) GetIncoming() ChatMessage {
+func (s *sock) CloseAll() {
+	if s.Conn != nil {
+		s.Close()
+		s.Conn = nil
+	}
+	s.stopTor()
+}
+
+func (s *sock) IncomingMsg() ChatMessage {
 	msg := <-s.messages
 	return msg
 }
@@ -129,26 +141,12 @@ func (s *sock) Send(msg interface{}) error {
 	return nil
 }
 
-func (s *sock) Start(ctx context.Context) {
-	_, err := s.connect(ctx)
-	if err != nil {
-		panic(err)
+func (s *sock) Start(ctx context.Context) error {
+	if _, err := s.connect(ctx); err != nil {
+		return err
 	}
 
-	go s.fetch(ctx)
-	go s.userHandler(ctx)
-	if !s.readOnly {
-		go s.msgWriter(ctx)
-	}
-	s.responseHandler(ctx)
-}
-
-func (s *sock) CloseAll() {
-	if s.Conn != nil {
-		s.Close()
-		s.Conn = nil
-	}
-	s.stopTor()
+	return s.startWorkers(ctx)
 }
 
 func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
@@ -157,6 +155,9 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 		return nil, ctx.Err()
 	default:
 	}
+
+	// User-Agent string for headers. Can't define a slice as a const.
+	userAgent := []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"}
 
 	// Close if necessary before reconnecting.
 	if s.Conn != nil {
@@ -172,7 +173,7 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	}
 	conn, _, err := dialer.Dial(s.url.String(), map[string][]string{
 		"Cookie":     s.cookies,
-		"User-Agent": []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"},
+		"User-Agent": userAgent,
 	})
 	if err != nil {
 		s.ClientMsg("Failed to connect. Retrying...")
@@ -206,7 +207,7 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 	// s.Tor should only be non-nil when Tor is running.
 	if s.Tor != nil {
 		if s.proxy == nil {
-			s.getTorProxy(ctx)
+			s.newProxyCtx(ctx)
 		}
 		// Dial socket through Tor proxy context.
 		wd.NetDialContext = s.proxy

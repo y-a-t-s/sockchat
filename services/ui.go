@@ -16,52 +16,51 @@ import (
 	"github.com/rivo/tview"
 )
 
-type ui struct {
-	l Logger
+type chatUI struct {
+	*tview.Application
+	flex *tview.Flex
 
-	App      *tview.Application
-	MainView *tview.Flex
-	ChatView *tview.TextView
-	InputBox *tview.InputField
+	chat     *chatView
+	inputBox *tview.InputField
+
+	logger Logger
+	sock   socket.Socket
 }
 
-func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l Logger) {
-	app := tview.NewApplication()
-	flex := tview.NewFlex().SetDirection(tview.FlexRow)
+func InitUI(ctx context.Context, sock socket.Socket, cfg config.Config, logger Logger) {
+	ui := chatUI{}
 
-	chatView := tview.NewTextView().
-		SetDynamicColors(true).
-		SetMaxLines(2048).
-		SetRegions(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			app.Draw()
-		})
-	msgBox := tview.NewInputField().
+	ui.Application = tview.NewApplication()
+	ui.flex = tview.NewFlex().SetDirection(tview.FlexRow)
+
+	ui.chat = ui.newChatView()
+	ui.flex.AddItem(ui.chat, 0, 1, false)
+	if !cfg.ReadOnly {
+		ui.inputBox = ui.newInputBox()
+		ui.flex.AddItem(ui.inputBox, 1, 1, true)
+	}
+
+	ui.SetRoot(ui.flex, true).SetFocus(ui.flex)
+
+	ui.logger = logger
+	ui.sock = sock
+
+	go ui.incomingHandler(ctx, sock)
+	ui.Run()
+}
+
+func (ui *chatUI) newInputBox() *tview.InputField {
+	ib := tview.NewInputField().
 		SetAcceptanceFunc(tview.InputFieldMaxLength(1024)).
 		SetFieldBackgroundColor(tcell.PaletteColor(0)).
 		SetFieldWidth(0).
 		SetLabel("> ")
 
-	u := ui{l, app, flex, chatView, msgBox}
-	defer app.Stop()
-
-	chatView.SetBorder(false)
-	chatView.SetDoneFunc(func(key tcell.Key) {
-		switch key {
-		case tcell.KeyBacktab:
-			flex.AddItem(msgBox, 1, 1, true)
-			app.SetFocus(flex)
-		case tcell.KeyCtrlC:
-			app.Stop()
-		}
-	})
-
 	tabRE := regexp.MustCompile(`@(\d+)`)
 	tabHandler := func(msg string) string {
 		return tabRE.ReplaceAllStringFunc(msg, func(m string) string {
 			id := m[1:]
-			if u := c.QueryUser(id); u != id {
+			if u := ui.sock.QueryUser(id); u != id {
 				return fmt.Sprintf("@%s,", u)
 			}
 
@@ -69,57 +68,66 @@ func InitUI(ctx context.Context, c socket.Socket, cfg config.Config, l Logger) {
 		})
 	}
 
-	msgBox.SetDoneFunc(func(key tcell.Key) {
+	ib.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			msg := strings.TrimSpace(msgBox.GetText())
+			if ui.sock == nil {
+				return
+			}
+
+			msg := strings.TrimSpace(ib.GetText())
 			// Add outgoing message to queue.
-			c.Send(msg)
-			msgBox.SetText("")
+			ui.sock.Send(msg)
+			ib.SetText("")
 		case tcell.KeyTab:
-			msg := msgBox.GetText()
-			msgBox.SetText(tabHandler(msg))
+			msg := ib.GetText()
+			ib.SetText(tabHandler(msg))
 		case tcell.KeyBacktab:
-			flex.RemoveItem(msgBox)
-			app.SetFocus(chatView)
+			if ui.chat == nil || ui.flex == nil {
+				return
+			}
+
+			ui.flex.RemoveItem(ib)
+			ui.SetFocus(ui.chat)
 		case tcell.KeyCtrlC:
-			app.Stop()
+			ui.Stop()
 		}
 	})
 
-	flex.AddItem(chatView, 0, 1, false)
-	if !cfg.ReadOnly {
-		flex.AddItem(msgBox, 1, 1, true)
-	}
-
-	app.SetRoot(flex, true).SetFocus(flex)
-
-	go u.incomingHandler(ctx, c)
-	app.Run()
+	ui.inputBox = ib
+	return ib
 }
 
-func (u *ui) incomingHandler(ctx context.Context, c socket.Socket) {
+func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
+	// tview uses square brackets for formatting and region tags.
+	// Any that appear in the raw message must be escaped by adding
+	// an extra opening bracket right before the closing one.
 	tagRE := regexp.MustCompile(`\[(.+?)\]`)
 	escapeTags := func(msg string) string {
 		return tagRE.ReplaceAllString(msg, "[$1[]")
 	}
 
-	var mentionRE *regexp.Regexp
 	// IDs of any messages that mention the user. Used for message highlighting.
 	var mentionIDs []string
+	highlightMsg := func(msg *socket.ChatMessage) {
+		beeep.Notify("New mention", html.UnescapeString(msg.MessageRaw), "")
+		mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
+		ui.chat.Highlight(mentionIDs...)
+	}
+
+	var mentionRE *regexp.Regexp
 	mentionHandler := func(msg *socket.ChatMessage) {
 		if mentionRE == nil {
-			cn := c.GetClientName()
-			if len(cn) == 0 {
+			clientName, err := c.ClientName()
+			// GetClientName() returns err if client's user data has not been recorded yet.
+			if err != nil {
 				return
 			}
-			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", cn))
+			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", clientName))
 		}
 
 		if mentionRE.MatchString(msg.MessageRaw) {
-			beeep.Notify("New mention", html.UnescapeString(msg.MessageRaw), "")
-			mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-			u.ChatView.Highlight(mentionIDs...)
+			highlightMsg(msg)
 		}
 	}
 
@@ -131,22 +139,22 @@ func (u *ui) incomingHandler(ctx context.Context, c socket.Socket) {
 		default:
 		}
 
-		msg := c.GetIncoming()
+		msg := c.IncomingMsg()
 		if prev == nil || msg != *prev {
 			timestamp := time.Unix(msg.MessageDate, 0)
 			msgStr := html.UnescapeString(msg.MessageRaw)
 
-			if u.l != nil {
-				u.l.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
+			if ui.logger != nil {
+				ui.logger.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
 					timestamp.Format("2006-01-02 15:04:05 MST"),
 					msg.Author.Username, msg.Author.ID, msgStr))
 			}
 
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(u.ChatView, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+			fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
 				msg.Author.GetColor(), timestamp.Format("15:04:05"),
 				msg.Author.GetUserString(), msg.MessageID, escapeTags(msgStr))
-			u.ChatView.ScrollToEnd()
+			ui.chat.ScrollToEnd()
 			mentionHandler(&msg)
 		}
 

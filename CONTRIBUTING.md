@@ -1,0 +1,3 @@
+# Contributing
+
+Just use tabs.
