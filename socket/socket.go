@@ -12,6 +12,7 @@ import (
 	"y-a-t-s/sockchat/config"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/proxy"
 )
 
 type Socket interface {
@@ -44,6 +45,8 @@ type sock struct {
 	readOnly   bool
 	room       uint
 	url        url.URL
+
+	socksProxy *proxy.Dialer
 }
 
 func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
@@ -84,12 +87,26 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		readOnly:   cfg.ReadOnly,
 		room:       cfg.Room,
 		url:        *hostUrl,
+		socksProxy: nil,
 	}
 
 	if cfg.Tor || strings.HasSuffix(s.url.Hostname(), ".onion") {
 		if err := s.startTor(ctx); err != nil {
 			return nil, err
 		}
+	} else if cfg.Proxy.Enabled {
+		var creds *proxy.Auth
+		if cfg.Proxy.User != "" {
+			creds = &proxy.Auth{
+				User:     cfg.Proxy.User,
+				Password: cfg.Proxy.Pass,
+			}
+		}
+		sp, err := newSocksDialer(cfg.Proxy.Addr, creds)
+		if err != nil {
+			return nil, err
+		}
+		s.socksProxy = &sp
 	}
 
 	return s, nil
@@ -207,10 +224,14 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 	// s.Tor should only be non-nil when Tor is running.
 	if s.Tor != nil {
 		if s.proxy == nil {
-			s.newProxyCtx(ctx)
+			s.newTorProxyCtx(ctx)
 		}
 		// Dial socket through Tor proxy context.
 		wd.NetDialContext = s.proxy
+	} else if s.socksProxy != nil {
+		if cd, ok := (*s.socksProxy).(proxy.ContextDialer); ok {
+			wd.NetDialContext = cd.DialContext
+		}
 	}
 
 	return wd, nil

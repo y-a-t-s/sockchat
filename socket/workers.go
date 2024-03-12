@@ -9,8 +9,6 @@ import (
 	"log"
 	"regexp"
 	"strconv"
-
-	"github.com/gorilla/websocket"
 )
 
 type ChatMessage struct {
@@ -74,7 +72,7 @@ func (s *sock) msgWriter(ctx context.Context) {
 				s.room = uint(tmp)
 			}
 
-			if err := s.write(msg); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+			if err := s.write(msg); err != nil {
 				// Send it back to the queue to try again.
 				s.outgoing <- msg
 			}

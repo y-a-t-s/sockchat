@@ -20,9 +20,19 @@ type Config struct {
 	Tor      bool   `json:"tor"`
 	UserID   int    `json:"user_id"`
 
-	ApiMode bool `json:",omitempty"`
+	Proxy proxyConfig `json:"proxy"`
+
+	// ApiMode bool `json:",omitempty"`
+
 	// Used for collecting remaining args, containing cookies.
 	Args []string `json:",omitempty"`
+}
+
+type proxyConfig struct {
+	Enabled bool   `json:"enabled"`
+	Addr    string `json:"address"`
+	User    string `json:"username"`
+	Pass    string `json:"password"`
 }
 
 // Load user config from config.json file in the UserConfigDir provided by the os package.
@@ -96,6 +106,13 @@ func newConfig() Config {
 		Room:     1,
 		Tor:      false,
 		UserID:   -1,
+
+		Proxy: proxyConfig{
+			Enabled: false,
+			Addr:    "",
+			User:    "",
+			Pass:    "",
+		},
 	}
 }
 

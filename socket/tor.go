@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net"
 
 	"github.com/cretz/bine/tor"
 )
-
-type proxyCtx func(ctx context.Context, network string, addr string) (net.Conn, error)
 
 type torConn struct {
 	*tor.Tor
@@ -25,7 +22,7 @@ func (t *torConn) startTor(ctx context.Context) error {
 		return err
 	}
 	t.Tor = ti
-	t.newProxyCtx(ctx)
+	t.newTorProxyCtx(ctx)
 
 	return nil
 }
@@ -44,7 +41,7 @@ func (t *torConn) stopTor() {
 	t.proxy = nil
 }
 
-func (t *torConn) newProxyCtx(ctx context.Context) (proxyCtx, error) {
+func (t *torConn) newTorProxyCtx(ctx context.Context) (proxyCtx, error) {
 	if t.Tor == nil {
 		return nil, errors.New("Not connected to Tor network.")
 	}
