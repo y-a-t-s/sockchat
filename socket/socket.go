@@ -198,15 +198,16 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	}
 	s.ClientMsg("Connected.\n")
 
-	s.Conn = conn
-
-	// Send /join message for desired room.
-	// Writing directly to avoid requiring the msgWriter routine, which may not be running.
-	err = s.write([]byte(fmt.Sprintf("/join %d", s.room)))
-	if err != nil {
-		s.ClientMsg(fmt.Sprintf("Failed to send join message."))
+	// If in read-only mode, temporarily start the message writer for 30 seconds at most.
+	if s.readOnly {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+		go s.msgWriter(ctx)
+		defer cancel()
 	}
+	// Send /join message for desired room.
+	s.Send(fmt.Sprintf("/join %d", s.room))
 
+	s.Conn = conn
 	return conn, nil
 }
 
