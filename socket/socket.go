@@ -15,6 +15,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// Abstraction layer for accessing socket data.
 type Socket interface {
 	ClientMsg(msg string)
 	ClientName() (string, error)
@@ -166,6 +167,7 @@ func (s *sock) Start(ctx context.Context) error {
 	return s.startWorkers(ctx)
 }
 
+// Create WebSocket connection to the server.
 func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	select {
 	case <-ctx.Done():
@@ -199,6 +201,7 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	s.ClientMsg("Connected.\n")
 
 	// If in read-only mode, temporarily start the message writer for 30 seconds at most.
+	// Required to send /join message.
 	if s.readOnly {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*30)
 		go s.msgWriter(ctx)
@@ -207,29 +210,26 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	// Send /join message for desired room.
 	s.Send(fmt.Sprintf("/join %d", s.room))
 
+	// Set s.conn at the end to avoid early access.
 	s.Conn = conn
 	return conn, nil
 }
 
+// Create new WebSocket dialer, routing through any applicable proxies.
 func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
-	// Set handshake timeout to 15 mins.
-	timeout, err := time.ParseDuration("15m")
-	if err != nil {
-		return websocket.Dialer{}, err
-	}
-
 	wd := websocket.Dialer{
 		EnableCompression: true,
-		HandshakeTimeout:  timeout,
+		// Set handshake timeout to 5 mins.
+		HandshakeTimeout: time.Minute * 5,
 	}
-	// s.Tor should only be non-nil when Tor is running.
-	if s.Tor != nil {
+	switch {
+	case s.Tor != nil: // s.Tor should only be non-nil when Tor is running.
 		if s.proxy == nil {
 			s.newTorProxyCtx(ctx)
 		}
 		// Dial socket through Tor proxy context.
 		wd.NetDialContext = s.proxy
-	} else if s.socksProxy != nil {
+	case s.socksProxy != nil: // Separate proxy isn't needed if using built-in Tor.
 		if cd, ok := (*s.socksProxy).(proxy.ContextDialer); ok {
 			wd.NetDialContext = cd.DialContext
 		}
@@ -238,13 +238,22 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 	return wd, nil
 }
 
-func (s *sock) write(msg []byte) error {
+// WebSocket msg writing wrapper.
+// Accepts []byte or string.
+func (s *sock) write(msg interface{}) error {
 	if s.Conn == nil {
 		return errors.New("Socket connection is nil.")
 	}
 
-	err := s.WriteMessage(websocket.TextMessage, msg)
-	if err != nil {
+	var out []byte
+	switch msg.(type) {
+	case []byte:
+		out = msg.([]byte)
+	case string:
+		out = []byte(msg.(string))
+	}
+
+	if err := s.WriteMessage(websocket.TextMessage, out); err != nil {
 		s.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
 		return err
 	}

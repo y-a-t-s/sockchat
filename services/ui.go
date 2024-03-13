@@ -99,12 +99,29 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 }
 
 func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
-	// tview uses square brackets for formatting and region tags.
-	// Any that appear in the raw message must be escaped by adding
-	// an extra opening bracket right before the closing one.
-	tagRE := regexp.MustCompile(`\[(.+?)\]`)
-	escapeTags := func(msg string) string {
-		return tagRE.ReplaceAllString(msg, "[$1[]")
+	tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
+	tagHandler := func(msg string) string {
+		return tagRE.ReplaceAllStringFunc(msg, func(tag string) string {
+			subs := tagRE.FindStringSubmatch(tag)
+			tagName := subs[1]
+			param := subs[3]
+
+			switch lower := strings.ToLower(tagName); lower {
+			case "b", "i", "s", "u":
+				return fmt.Sprintf("[::%s]", lower)
+			case "/b", "/i", "/s", "/u":
+				return fmt.Sprintf("[::%s]", strings.ToUpper(lower[1:]))
+			case "color":
+				return fmt.Sprintf("[%s]", param)
+			case "/color":
+				return "[-]"
+			default:
+				// tview uses square brackets for formatting and region tags.
+				// Any that appear in the raw message must be handled or escaped
+				// by adding an extra opening bracket right before the closing one.
+				return fmt.Sprintf("[%s[]", subs[1])
+			}
+		})
 	}
 
 	// IDs of any messages that mention the user. Used for message highlighting.
@@ -151,9 +168,9 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 			}
 
 			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"]\n",
+			fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
 				msg.Author.GetColor(), timestamp.Format("15:04:05"),
-				msg.Author.GetUserString(), msg.MessageID, escapeTags(msgStr))
+				msg.Author.GetUserString(), msg.MessageID, tagHandler(msgStr))
 			ui.chat.ScrollToEnd()
 			mentionHandler(&msg)
 		}
