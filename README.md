@@ -2,9 +2,17 @@
 
 A KF chat client.
 
-## Usage
+## Basic Usage
 
-1. `sockchat "$COOKIES"` where `$COOKIES` is the raw cookies value from the site's header.
+* Windows: `sockchat_windows_ARCH.exe "$COOKIES"`
+
+* macOS: `./sockchat_macos_ARCH "$COOKIES"`
+
+* Linux: `./sockchat_linux_ARCH "$COOKIES"` 
+
+Where `$COOKIES` is the raw cookies value from the site's header.
+
+### Cookies
 
 Use the network tab in your browser's dev tools to find the `chat.ws` connection on the forum's homepage. Your cookies are found in the request header. It looks a little something like this:
 
@@ -12,15 +20,17 @@ Use the network tab in your browser's dev tools to find the `chat.ws` connection
 xf_tfa_trust=VALUE; xf_user=VALUE; xf_emoji_usage=VALUE; xf_csrf=VALUE; xf_session=VALUE
 ```
 
+You don't need all of these values to be present. Whatever your browser uses to connect and log you in will work fine.
+
 If the connection fails, confirm the URL in your `config.json` file is up-to-date.
 
-## Features
+## Notable Features
 
 * Mention users using numerical IDs. When typing a message, any mentions in the form of `@USER_ID` will be replaced with `@USERNAME,` when you hit TAB. Example: `@160024 stfu` -> `@y a t s, stfu`
 
     * The ID mention can appear anywhere in the message, and more than 1 can be used at once. If it's not a recognized user ID, it will not be replaced.
     
-* Standalone Tor support.
+* Tor support.
 
 * Notifications when you're mentioned.
 
