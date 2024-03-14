@@ -18,7 +18,7 @@ package main
  * @@@@@**%@@@@@@@@@&**@@@@@@@@@@
  *
  * By: The KF community
- * Logo credit: DPS
+ * Logo credit: DPS (#153597)
  */
 
 import (
@@ -36,11 +36,16 @@ import (
 )
 
 func main() {
-	cfg, err := config.ParseArgs()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Panic(err)
 	}
+	if err := cfg.ParseArgs(); err != nil {
+		log.Panic(err)
+	}
 
+	// Catch terminating signals to try shutting down gracefully.
+	// Needed to ensure log buffer gets flushed.
 	sigs := []os.Signal{
 		syscall.SIGABRT, syscall.SIGHUP,
 		syscall.SIGINT, syscall.SIGKILL,
@@ -48,10 +53,11 @@ func main() {
 		syscall.SIGSEGV, syscall.SIGTERM,
 	}
 	if runtime.GOOS != "windows" {
-		// syscall.SIGSTOP is not defined when targeting Windows.
+		// syscall.SIGSTOP (0x13) is not defined when targeting Windows.
 		var stop syscall.Signal = 0x13
 		sigs = append(sigs, stop)
 	}
+	// Create context that cancels on detection of any signals listed above.
 	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
 	defer cancel()
 
@@ -61,6 +67,8 @@ func main() {
 	}
 	context.AfterFunc(ctx, sock.CloseAll)
 
+	// WaitGroup for main worker routines.
+	// Ensures all routines terminate before the program exits.
 	var wg sync.WaitGroup
 
 	var l services.Logger

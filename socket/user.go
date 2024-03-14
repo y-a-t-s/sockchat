@@ -19,7 +19,7 @@ type UserQuery struct {
 	Username chan string
 }
 
-func (u User) GetColor() string {
+func (u User) Color() string {
 	// Original ANSI spec has 8 basic colors, which the user can set for their terminal theme.
 	// 2 of the colors are black and white, which we'll leave out. This leaves 6 remaining colors.
 	// We'll exclude the darker blue for better visibility against the standard dark background.
@@ -27,8 +27,8 @@ func (u User) GetColor() string {
 	return ansi[u.ID%uint32(len(ansi))]
 }
 
-func (u User) GetUserString() string {
-	color := u.GetColor()
+func (u User) UserString() string {
+	color := u.Color()
 	// This is kinda ugly, so I'll explain:
 	// [%s::u] is a UI style tag for the color and enabling underlining.
 	// [-] clears the set color to print the ID (the %d value).

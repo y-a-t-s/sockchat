@@ -7,14 +7,9 @@ import (
 	"os"
 )
 
-func ParseArgs() (Config, error) {
-	cfg, err := LoadConfig()
-	if err != nil {
-		return cfg, err
-	}
-
+func (cfg *Config) ParseArgs() error {
 	newEnvError := func(errStr string) error {
-		return errors.New(fmt.Sprintf("%s\nCheck .env or specify with argument.", errStr))
+		return errors.New(fmt.Sprintf("%s\nCheck config or specify with argument.", errStr))
 	}
 
 	flags := flag.NewFlagSet("SockChat", flag.ContinueOnError)
@@ -29,8 +24,8 @@ func ParseArgs() (Config, error) {
 	cfg.Args = flags.Args()
 
 	if cfg.Host == "" {
-		return cfg, newEnvError("Hostname not defined. Check config or provide --host arg.")
+		return newEnvError("Hostname not defined.")
 	}
 
-	return cfg, nil
+	return nil
 }

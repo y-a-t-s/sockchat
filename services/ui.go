@@ -100,7 +100,7 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 
 func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 	tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
-	tagHandler := func(msg string) string {
+	processTags := func(msg string) string {
 		return tagRE.ReplaceAllStringFunc(msg, func(tag string) string {
 			subs := tagRE.FindStringSubmatch(tag)
 			tagName := subs[1]
@@ -148,7 +148,7 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 	}
 
-	var prev *socket.ChatMessage
+	var prev socket.ChatMessage
 	for {
 		select {
 		case <-ctx.Done():
@@ -157,24 +157,27 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 
 		msg := c.IncomingMsg()
-		if prev == nil || msg != *prev {
-			timestamp := time.Unix(msg.MessageDate, 0)
-			msgStr := html.UnescapeString(msg.MessageRaw)
-
-			if ui.logger != nil {
-				ui.logger.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
-					timestamp.Format("2006-01-02 15:04:05 MST"),
-					msg.Author.Username, msg.Author.ID, msgStr))
-			}
-
-			// Print chat message, preceded by the sender's username and ID.
-			fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
-				msg.Author.GetColor(), timestamp.Format("15:04:05"),
-				msg.Author.GetUserString(), msg.MessageID, tagHandler(msgStr))
-			ui.chat.ScrollToEnd()
-			mentionHandler(&msg)
+		// Don't output duplicates.
+		if msg == prev {
+			continue
 		}
 
-		prev = &msg
+		timestamp := time.Unix(msg.MessageDate, 0)
+		msgStr := html.UnescapeString(msg.MessageRaw)
+
+		if ui.logger != nil {
+			ui.logger.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
+				timestamp.Format("2006-01-02 15:04:05 MST"),
+				msg.Author.Username, msg.Author.ID, msgStr))
+		}
+
+		// Print chat message, preceded by the sender's username and ID.
+		fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
+			msg.Author.Color(), timestamp.Format("15:04:05"),
+			msg.Author.UserString(), msg.MessageID, processTags(msgStr))
+		mentionHandler(&msg)
+		ui.chat.ScrollToEnd()
+
+		prev = msg
 	}
 }

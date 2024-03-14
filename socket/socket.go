@@ -55,7 +55,7 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		// Provided host might start with the protocol or have a trailing /, so isolate the domain.
 		tmp := regexp.MustCompile(`(https?://)?([\w.]+)/?`).FindStringSubmatch(cfg.Host)
 		if len(tmp) < 3 {
-			return nil, errors.New("Failed to parse SC_HOST from env.")
+			return nil, errors.New("Failed to parse host.")
 		}
 		host, port := tmp[2], cfg.Port
 
@@ -91,11 +91,12 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		socksProxy: nil,
 	}
 
-	if cfg.Tor || strings.HasSuffix(s.url.Hostname(), ".onion") {
+	switch {
+	case cfg.Tor, strings.HasSuffix(s.url.Hostname(), ".onion"):
 		if err := s.startTor(ctx); err != nil {
 			return nil, err
 		}
-	} else if cfg.Proxy.Enabled {
+	case cfg.Proxy.Enabled:
 		var creds *proxy.Auth
 		if cfg.Proxy.User != "" {
 			creds = &proxy.Auth{
@@ -164,7 +165,8 @@ func (s *sock) Start(ctx context.Context) error {
 		return err
 	}
 
-	return s.startWorkers(ctx)
+	s.startWorkers(ctx)
+	return nil
 }
 
 // Create WebSocket connection to the server.
