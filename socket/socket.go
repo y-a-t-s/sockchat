@@ -161,10 +161,7 @@ func (s *sock) Send(msg interface{}) error {
 }
 
 func (s *sock) Start(ctx context.Context) error {
-	if _, err := s.connect(ctx); err != nil {
-		return err
-	}
-
+	s.connect(ctx)
 	s.startWorkers(ctx)
 	return nil
 }
@@ -197,8 +194,8 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 		"User-Agent": userAgent,
 	})
 	if err != nil {
-		s.ClientMsg("Failed to connect. Retrying...")
-		return s.connect(ctx)
+		s.ClientMsg("Failed to connect.")
+		return nil, err
 	}
 	s.ClientMsg("Connected.\n")
 
@@ -240,11 +237,30 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 	return wd, nil
 }
 
+// Tries reconnecting 8 times.
+func (s *sock) reconnect(ctx context.Context) (*websocket.Conn, error) {
+	for i := 0; i < 8; {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("Context closed.")
+		default:
+		}
+		if conn, err := s.connect(ctx); err != nil {
+			// Increment fail count.
+			i++
+		} else {
+			return conn, nil
+		}
+	}
+
+	return nil, errors.New("Reconnect failed.")
+}
+
 // WebSocket msg writing wrapper.
 // Accepts []byte or string.
 func (s *sock) write(msg interface{}) error {
 	if s.Conn == nil {
-		return errors.New("Socket connection is nil.")
+		return errors.New("WebSocket is nil.")
 	}
 
 	var out []byte

@@ -9,6 +9,7 @@ import (
 	"log"
 	"regexp"
 	"strconv"
+	"time"
 )
 
 type ChatMessage struct {
@@ -37,12 +38,17 @@ func (s *sock) msgReader(ctx context.Context) {
 
 		if s.Conn == nil {
 			s.connect(ctx)
+			continue
 		}
 
 		_, msg, err := s.ReadMessage()
 		if err != nil {
 			s.ClientMsg("Failed to read from socket.\n")
-			s.connect(ctx)
+			if _, err := s.reconnect(ctx); err != nil {
+				s.ClientMsg("Max retries reached. Waiting 15 seconds.")
+				time.Sleep(time.Second * 15)
+			}
+			continue
 		}
 
 		s.incoming <- msg
