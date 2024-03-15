@@ -45,7 +45,7 @@ type sock struct {
 	room       uint
 	url        url.URL
 
-	proxyDialer socksProxy
+	proxy socksProxy
 }
 
 func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
@@ -96,13 +96,13 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
-		clientID:    cfg.UserID,
-		clientName:  "",
-		cookies:     cfg.Args,
-		readOnly:    cfg.ReadOnly,
-		room:        cfg.Room,
-		url:         *hostUrl,
-		proxyDialer: socksProxy{},
+		clientID:   cfg.UserID,
+		clientName: "",
+		cookies:    cfg.Args,
+		readOnly:   cfg.ReadOnly,
+		room:       cfg.Room,
+		url:        *hostUrl,
+		proxy:      socksProxy{},
 	}
 
 	switch {
@@ -111,17 +111,17 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		if err != nil {
 			return nil, err
 		}
-		s.proxyDialer = p
+		s.proxy = p
 	case cfg.Proxy.Enabled:
 		addr, err := parseProxyAddr()
 		if err != nil {
 			return nil, err
 		}
-		p, err := newSocksDialer(addr)
+		p, err := newSocksDialer(*addr)
 		if err != nil {
 			return nil, err
 		}
-		s.proxyDialer = p
+		s.proxy = p
 	}
 
 	return s, nil
@@ -152,7 +152,7 @@ func (s *sock) CloseAll() {
 		s.Close()
 		s.Conn = nil
 	}
-	s.proxyDialer.stopTor()
+	s.proxy.stopTor()
 }
 
 func (s *sock) IncomingMsg() ChatMessage {
@@ -234,9 +234,9 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 		// Set handshake timeout to 5 mins.
 		HandshakeTimeout: time.Minute * 5,
 	}
-	if s.proxyDialer.dialCtx != nil {
+	if s.proxy.dialCtx != nil {
 		// Dial socket through Tor proxy context.
-		wd.NetDialContext = s.proxyDialer.dialCtx
+		wd.NetDialContext = s.proxy.dialCtx
 	}
 
 	return wd, nil

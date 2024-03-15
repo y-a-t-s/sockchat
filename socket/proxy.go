@@ -21,6 +21,20 @@ type socksProxy struct {
 
 type proxyCtx func(ctx context.Context, network string, addr string) (net.Conn, error)
 
+func newSocksDialer(addr url.URL) (socksProxy, error) {
+	var p socksProxy
+
+	d, err := proxy.FromURL(&addr, &net.Dialer{})
+	if err != nil {
+		return p, err
+	}
+
+	p.Dialer = d
+	p.dialCtx = d.(proxy.ContextDialer).DialContext
+	p.url = &addr
+	return p, nil
+}
+
 func startTor(ctx context.Context) (socksProxy, error) {
 	var p socksProxy
 
@@ -50,26 +64,4 @@ func (p *socksProxy) stopTor() {
 
 	p.tor.Close()
 	p.tor = nil
-}
-
-func newSocksDialer(addr *url.URL) (socksProxy, error) {
-	var p socksProxy
-	var auth *proxy.Auth
-	if addr.User != nil {
-		auth = &proxy.Auth{
-			User: addr.User.Username(),
-		}
-		if pass, set := addr.User.Password(); set {
-			auth.Password = pass
-		}
-	}
-	d, err := proxy.SOCKS5("tcp", addr.Host, auth, &net.Dialer{})
-	if err != nil {
-		return p, err
-	}
-
-	p.Dialer = d
-	p.dialCtx = d.(proxy.ContextDialer).DialContext
-	p.url = addr
-	return p, nil
 }
