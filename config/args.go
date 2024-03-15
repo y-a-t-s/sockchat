@@ -16,9 +16,10 @@ func (cfg *Config) ParseArgs() error {
 	flags.StringVar(&cfg.Host, "host", cfg.Host, "Specify hostname to connect to.")
 	flags.BoolVar(&cfg.Logger, "log", cfg.Logger, "Enable chat logger.")
 	flags.UintVar(&cfg.Port, "port", cfg.Port, "Specify outgoing socket port.")
-	flags.BoolVar(&cfg.ReadOnly, "ro", cfg.ReadOnly, "Read-only (lurker) mode.")
 	flags.UintVar(&cfg.Room, "room", cfg.Room, "Room to join by default.")
 	flags.BoolVar(&cfg.Tor, "tor", cfg.Tor, "Connect through Tor network.")
+	flags.BoolVar(&cfg.ReadOnly, "ro", cfg.ReadOnly, "Read-only (lurker) mode.")
+	// flags.BoolVar(&cfg.ApiMode, "api", cfg.ApiMode, "Start in API mode. See the documentation.")
 	flags.Parse(os.Args[1:])
 	// Collect all remaining args that aren't flags. Used for getting cookies.
 	cfg.Args = flags.Args()

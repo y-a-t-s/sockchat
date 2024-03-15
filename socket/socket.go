@@ -12,7 +12,6 @@ import (
 	"y-a-t-s/sockchat/config"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/net/proxy"
 )
 
 // Abstraction layer for accessing socket data.
@@ -37,7 +36,6 @@ type channels struct {
 
 type sock struct {
 	*websocket.Conn
-	torConn
 	channels
 
 	clientID   int
@@ -47,7 +45,7 @@ type sock struct {
 	room       uint
 	url        url.URL
 
-	socksProxy *proxy.Dialer
+	proxyDialer socksProxy
 }
 
 func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
@@ -68,13 +66,29 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		return su, nil
 	}
 
+	parseProxyAddr := func() (*url.URL, error) {
+		tmp := regexp.MustCompile(`(socks5://)?(.+)/?`).FindStringSubmatch(cfg.Proxy.Addr)
+		if len(tmp) < 3 {
+			return nil, errors.New("Failed to parse proxy address.")
+		}
+		u, err := url.Parse(fmt.Sprintf("socks5://%s", tmp[2]))
+		if err != nil {
+			return nil, err
+		}
+
+		if u.User == nil && cfg.Proxy.User != "" {
+			u.User = url.UserPassword(cfg.Proxy.User, cfg.Proxy.Pass)
+		}
+
+		return u, nil
+	}
+
 	hostUrl, err := parseHost()
 	if err != nil {
 		return nil, err
 	}
 	s := &sock{
-		Conn:    nil,
-		torConn: torConn{},
+		Conn: nil,
 		channels: channels{
 			messages:  make(chan ChatMessage, 1024),
 			outgoing:  make(chan []byte, 16),
@@ -82,33 +96,32 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
-		clientID:   cfg.UserID,
-		clientName: "",
-		cookies:    cfg.Args,
-		readOnly:   cfg.ReadOnly,
-		room:       cfg.Room,
-		url:        *hostUrl,
-		socksProxy: nil,
+		clientID:    cfg.UserID,
+		clientName:  "",
+		cookies:     cfg.Args,
+		readOnly:    cfg.ReadOnly,
+		room:        cfg.Room,
+		url:         *hostUrl,
+		proxyDialer: socksProxy{},
 	}
 
 	switch {
 	case cfg.Tor, strings.HasSuffix(s.url.Hostname(), ".onion"):
-		if err := s.startTor(ctx); err != nil {
-			return nil, err
-		}
-	case cfg.Proxy.Enabled:
-		var creds *proxy.Auth
-		if cfg.Proxy.User != "" {
-			creds = &proxy.Auth{
-				User:     cfg.Proxy.User,
-				Password: cfg.Proxy.Pass,
-			}
-		}
-		sp, err := newSocksDialer(cfg.Proxy.Addr, creds)
+		p, err := startTor(ctx)
 		if err != nil {
 			return nil, err
 		}
-		s.socksProxy = &sp
+		s.proxyDialer = p
+	case cfg.Proxy.Enabled:
+		addr, err := parseProxyAddr()
+		if err != nil {
+			return nil, err
+		}
+		p, err := newSocksDialer(addr)
+		if err != nil {
+			return nil, err
+		}
+		s.proxyDialer = p
 	}
 
 	return s, nil
@@ -139,7 +152,7 @@ func (s *sock) CloseAll() {
 		s.Close()
 		s.Conn = nil
 	}
-	s.stopTor()
+	s.proxyDialer.stopTor()
 }
 
 func (s *sock) IncomingMsg() ChatMessage {
@@ -221,17 +234,9 @@ func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
 		// Set handshake timeout to 5 mins.
 		HandshakeTimeout: time.Minute * 5,
 	}
-	switch {
-	case s.Tor != nil: // s.Tor should only be non-nil when Tor is running.
-		if s.proxy == nil {
-			s.newTorProxyCtx(ctx)
-		}
+	if s.proxyDialer.dialCtx != nil {
 		// Dial socket through Tor proxy context.
-		wd.NetDialContext = s.proxy
-	case s.socksProxy != nil: // Separate proxy isn't needed if using built-in Tor.
-		if cd, ok := (*s.socksProxy).(proxy.ContextDialer); ok {
-			wd.NetDialContext = cd.DialContext
-		}
+		wd.NetDialContext = s.proxyDialer.dialCtx
 	}
 
 	return wd, nil
