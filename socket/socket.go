@@ -38,27 +38,40 @@ type sock struct {
 	*websocket.Conn
 	channels
 
-	clientID   int
-	clientName string
-	cookies    []string
-	readOnly   bool
-	room       uint
-	url        url.URL
+	client   string
+	clientID int
+	cookies  []string
+	readOnly bool
+	room     uint
+	url      url.URL
 
 	proxy socksProxy
 }
 
 func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
-	parseHost := func() (*url.URL, error) {
-		// Provided host might start with the protocol or have a trailing /, so isolate the domain.
-		tmp := regexp.MustCompile(`(https?://)?([\w.]+)/?`).FindStringSubmatch(cfg.Host)
-		if len(tmp) < 3 {
-			return nil, errors.New("Failed to parse host.")
+	// Split the protocol part from addresses in the config, if present.
+	splitProtocol := func(addr string) (string, string, error) {
+		// FindStringSubmatch is used to capture the groups.
+		// Index 0 is the full matchng string with all groups.
+		// The rest are numbered by the order of the opening parens.
+		// Here, we want the last 2 groups (indexes 1 and 2, requiring length 3).
+		tmp := regexp.MustCompile(`([\w-]+://)?([^/]+)`).FindStringSubmatch(addr)
+		// At the very least, we need the hostname part (index 2).
+		if len(tmp) < 3 || tmp[2] == "" {
+			return "", "", errors.New(fmt.Sprintf("Failed to parse address: %s", addr))
 		}
-		host, port := tmp[2], cfg.Port
+
+		return tmp[1], tmp[2], nil
+	}
+
+	parseHost := func() (*url.URL, error) {
+		_, host, err := splitProtocol(cfg.Host)
+		if err != nil {
+			return nil, err
+		}
 
 		// Assemble url to chat.ws with appropriate domain and port.
-		su, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host, port))
+		su, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host, cfg.Port))
 		if err != nil {
 			return nil, err
 		}
@@ -67,16 +80,24 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 	}
 
 	parseProxyAddr := func() (*url.URL, error) {
-		tmp := regexp.MustCompile(`(socks5://)?(.+)/?`).FindStringSubmatch(cfg.Proxy.Addr)
-		if len(tmp) < 3 {
-			return nil, errors.New("Failed to parse proxy address.")
+		proto, addr, err := splitProtocol(cfg.Proxy.Addr)
+		if err != nil {
+			return nil, err
 		}
-		u, err := url.Parse(fmt.Sprintf("socks5://%s", tmp[2]))
+		// Fallback to socks5 if no protocol is given.
+		if proto == "" {
+			proto = "socks5"
+		}
+		u, err := url.Parse(fmt.Sprintf("%s://%s", proto, addr))
 		if err != nil {
 			return nil, err
 		}
 
+		// url.Parse collects any credentials in the URL to a *url.Userinfo.
+		// If none are found, the pointer is nil.
+		// Credentials in the URL take precedence over explicit ones in the config.
 		if u.User == nil && cfg.Proxy.User != "" {
+			// Create new &url.Userinfo with the explicit credentials.
 			u.User = url.UserPassword(cfg.Proxy.User, cfg.Proxy.Pass)
 		}
 
@@ -96,13 +117,13 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 			incoming:  make(chan []byte, 1024),
 			users:     make(chan User, 1024),
 		},
-		clientID:   cfg.UserID,
-		clientName: "",
-		cookies:    cfg.Args,
-		readOnly:   cfg.ReadOnly,
-		room:       cfg.Room,
-		url:        *hostUrl,
-		proxy:      socksProxy{},
+		clientID: cfg.UserID,
+		client:   "",
+		cookies:  cfg.Args,
+		readOnly: cfg.ReadOnly,
+		room:     cfg.Room,
+		url:      *hostUrl,
+		proxy:    socksProxy{},
 	}
 
 	switch {
@@ -140,11 +161,11 @@ func (s *sock) ClientMsg(msg string) {
 }
 
 func (s *sock) ClientName() (string, error) {
-	if s.clientName == "" {
+	if s.client == "" {
 		return "", errors.New("Client's ID does not have an entry in the user table yet.")
 	}
 
-	return s.clientName, nil
+	return s.client, nil
 }
 
 func (s *sock) CloseAll() {

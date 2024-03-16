@@ -6,16 +6,15 @@ import (
 	"net"
 	"net/url"
 
-	"golang.org/x/net/proxy"
-
 	"github.com/cretz/bine/tor"
+	"golang.org/x/net/proxy"
 )
 
 type socksProxy struct {
 	proxy.Dialer
 	dialCtx proxyCtx
 
-	url *url.URL
+	url url.URL
 	tor *tor.Tor
 }
 
@@ -31,7 +30,7 @@ func newSocksDialer(addr url.URL) (socksProxy, error) {
 
 	p.Dialer = d
 	p.dialCtx = d.(proxy.ContextDialer).DialContext
-	p.url = &addr
+	p.url = addr
 	return p, nil
 }
 

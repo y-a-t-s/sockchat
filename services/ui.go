@@ -51,14 +51,15 @@ func InitUI(ctx context.Context, sock socket.Socket, cfg config.Config, logger L
 
 func (ui *chatUI) newInputBox() *tview.InputField {
 	ib := tview.NewInputField().
-		SetAcceptanceFunc(tview.InputFieldMaxLength(1024)).
+		// Idk what the site caps it at.
+		SetAcceptanceFunc(tview.InputFieldMaxLength(2048)).
+		// Use terminal background color for input box.
 		SetFieldBackgroundColor(tcell.PaletteColor(0)).
 		SetFieldWidth(0).
 		SetLabel("> ")
 
-	tabRE := regexp.MustCompile(`@(\d+)`)
 	tabHandler := func(msg string) string {
-		return tabRE.ReplaceAllStringFunc(msg, func(m string) string {
+		return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
 			id := m[1:]
 			if u := ui.sock.QueryUser(id); u != id {
 				return fmt.Sprintf("@%s,", u)
@@ -99,8 +100,8 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 }
 
 func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
-	tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
 	processTags := func(msg string) string {
+		tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
 		return tagRE.ReplaceAllStringFunc(msg, func(tag string) string {
 			subs := tagRE.FindStringSubmatch(tag)
 			tagName := subs[1]
@@ -157,7 +158,7 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 
 		msg := c.IncomingMsg()
-		// Don't output duplicates.
+		// Don't output contiguous duplicates.
 		if msg == prev {
 			continue
 		}

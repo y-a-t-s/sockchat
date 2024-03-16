@@ -59,8 +59,8 @@ func (s *sock) userHandler(ctx context.Context) {
 	for {
 		select {
 		case user := <-s.users:
-			if s.clientName == "" && user.ID == uint32(s.clientID) {
-				s.clientName = user.Username
+			if s.client == "" && user.ID == uint32(s.clientID) {
+				s.client = user.Username
 			}
 			userMap[fmt.Sprint(user.ID)] = user.Username
 		case query := <-s.userQuery:

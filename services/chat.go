@@ -14,7 +14,7 @@ type chatView struct {
 func (ui *chatUI) newChatView() *chatView {
 	chat := tview.NewTextView().
 		SetDynamicColors(true).
-		SetMaxLines(2048).
+		SetMaxLines(512).
 		SetRegions(true).
 		SetScrollable(true).
 		SetChangedFunc(func() {
