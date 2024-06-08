@@ -263,20 +263,6 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	return conn, nil
 }
 
-func (s *sock) newDialer() (websocket.Dialer, error) {
-	wd := websocket.Dialer{
-		EnableCompression: true,
-		// Set handshake timeout to 5 mins.
-		HandshakeTimeout: time.Minute * 5,
-	}
-	if s.proxy.dialCtx != nil {
-		// Dial socket through Tor proxy context.
-		wd.NetDialContext = s.proxy.dialCtx
-	}
-
-	return wd, nil
-}
-
 // Tries reconnecting 8 times.
 func (s *sock) reconnect(ctx context.Context) (*websocket.Conn, error) {
 	for i := 0; i < 8; {
