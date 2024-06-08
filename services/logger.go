@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -25,10 +26,10 @@ func NewLogger() (Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	logDir := fmt.Sprintf("%s/sockchat/logs", cfgDir)
+	logDir := filepath.Join(cfgDir, "sockchat/logs")
 
 	t := time.Now()
-	outDir := fmt.Sprintf("%s/%s", logDir, t.Format("2006-01-02"))
+	outDir := filepath.Join(logDir, t.Format("2006-01-02"))
 
 	err = os.Mkdir(logDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
@@ -40,8 +41,8 @@ func NewLogger() (Logger, error) {
 	}
 
 	// See time.Format docs to make sense of the date string.
-	fname := fmt.Sprintf("%s/%s.log", outDir, t.Format("2006-01-02 15:04:05 MST"))
-	logFile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logPath := filepath.Join(outDir, fmt.Sprintf("%s.log", t.Format("2006-01-02 15:04:05 MST")))
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}

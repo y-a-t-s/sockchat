@@ -58,6 +58,8 @@ func (s *sock) userHandler(ctx context.Context) {
 	userMap := make(map[string]string)
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case user := <-s.users:
 			if s.client == "" && user.ID == uint32(s.clientID) {
 				s.client = user.Username

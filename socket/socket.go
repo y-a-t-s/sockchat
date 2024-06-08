@@ -52,7 +52,7 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 	// Split the protocol part from addresses in the config, if present.
 	splitProtocol := func(addr string) (string, string, error) {
 		// FindStringSubmatch is used to capture the groups.
-		// Index 0 is the full matchng string with all groups.
+		// Index 0 is the full matching string with all groups.
 		// The rest are numbered by the order of the opening parens.
 		// Here, we want the last 2 groups (indexes 1 and 2, requiring length 3).
 		tmp := regexp.MustCompile(`([\w-]+://)?([^/]+)`).FindStringSubmatch(addr)
@@ -208,6 +208,21 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	default:
 	}
 
+	// Create new WebSocket dialer, routing through any applicable proxies.
+	newDialer := func() (websocket.Dialer, error) {
+		wd := websocket.Dialer{
+			EnableCompression: true,
+			// Set handshake timeout to 5 mins.
+			HandshakeTimeout: time.Minute * 5,
+		}
+		if s.proxy.dialCtx != nil {
+			// Dial socket through Tor proxy context.
+			wd.NetDialContext = s.proxy.dialCtx
+		}
+
+		return wd, nil
+	}
+
 	// User-Agent string for headers. Can't define a slice as a const.
 	userAgent := []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"}
 
@@ -219,7 +234,7 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 
 	s.ClientMsg("Opening socket...")
 
-	dialer, err := s.newDialer(ctx)
+	dialer, err := newDialer()
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +263,7 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 	return conn, nil
 }
 
-// Create new WebSocket dialer, routing through any applicable proxies.
-func (s *sock) newDialer(ctx context.Context) (websocket.Dialer, error) {
+func (s *sock) newDialer() (websocket.Dialer, error) {
 	wd := websocket.Dialer{
 		EnableCompression: true,
 		// Set handshake timeout to 5 mins.
