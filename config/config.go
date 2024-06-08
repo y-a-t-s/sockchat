@@ -3,9 +3,9 @@ package config
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 )
 
 // Config object with set parameters.
@@ -50,7 +50,8 @@ func LoadConfig() (Config, error) {
 	}
 
 	// Open config.json file for RW.
-	f, err := os.OpenFile(fmt.Sprintf("%s/config.json", cfgDir), os.O_CREATE|os.O_RDWR, 0644)
+	cfgPath := filepath.Join(cfgDir, "config.json")
+	f, err := os.OpenFile(cfgPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return cfg, err
 	}
@@ -84,7 +85,7 @@ func configDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cfgDir := fmt.Sprintf("%s/sockchat", ucd)
+	cfgDir := filepath.Join(ucd, "sockchat")
 
 	// Create config dir if necessary. Doesn't break anything existing.
 	// If the dir already exists, it will return an fs.ErrExist error.
