@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -40,8 +41,12 @@ func NewLogger() (Logger, error) {
 		return nil, err
 	}
 
+	dateFmt := "2006-01-02 15:04:05 MST"
 	// See time.Format docs to make sense of the date string.
-	logPath := filepath.Join(outDir, fmt.Sprintf("%s.log", t.Format("2006-01-02 15:04:05 MST")))
+	if runtime.GOOS == "windows" {
+		dateFmt = "2006-01-02 15_04_05 MST"
+	}
+	logPath := filepath.Join(outDir, fmt.Sprintf("%s.log", t.Format(dateFmt)))
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
