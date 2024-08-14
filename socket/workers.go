@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"regexp"
 	"strconv"
@@ -123,6 +124,7 @@ func (s *sock) responseHandler(ctx context.Context) {
 			switch out.(type) {
 			case *ChatMessage:
 				msg := *(out.(*ChatMessage))
+				msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 				s.messages <- msg
 				s.users <- msg.Author
 			case *User:

@@ -19,10 +19,10 @@ type Socket interface {
 	ClientMsg(msg string)
 	ClientName() (string, error)
 	CloseAll()
-	IncomingMsg() ChatMessage
+	ReadMsg() ChatMessage
 	QueryUser(id string) string
 	Send(msg interface{}) error
-	Start(ctx context.Context) error
+	Start(ctx context.Context)
 }
 
 type channels struct {
@@ -64,33 +64,18 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 		return tmp[1], tmp[2], nil
 	}
 
-	parseHost := func() (*url.URL, error) {
-		_, host, err := splitProtocol(cfg.Host)
-		if err != nil {
-			return nil, err
-		}
-
-		// Assemble url to chat.ws with appropriate domain and port.
-		su, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host, cfg.Port))
-		if err != nil {
-			return nil, err
-		}
-
-		return su, nil
-	}
-
-	parseProxyAddr := func() (*url.URL, error) {
+	parseProxyAddr := func() (u *url.URL, err error) {
 		proto, addr, err := splitProtocol(cfg.Proxy.Addr)
 		if err != nil {
-			return nil, err
+			return
 		}
 		// Fallback to socks5 if no protocol is given.
 		if proto == "" {
 			proto = "socks5"
 		}
-		u, err := url.Parse(fmt.Sprintf("%s://%s", proto, addr))
+		u, err = url.Parse(fmt.Sprintf("%s://%s", proto, addr))
 		if err != nil {
-			return nil, err
+			return
 		}
 
 		// url.Parse collects any credentials in the URL to a *url.Userinfo.
@@ -101,13 +86,19 @@ func NewSocket(ctx context.Context, cfg config.Config) (Socket, error) {
 			u.User = url.UserPassword(cfg.Proxy.User, cfg.Proxy.Pass)
 		}
 
-		return u, nil
+		return
 	}
 
-	hostUrl, err := parseHost()
+	_, host, err := splitProtocol(cfg.Host)
 	if err != nil {
 		return nil, err
 	}
+	// Assemble url to chat.ws with appropriate domain and port.
+	hostUrl, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host, cfg.Port))
+	if err != nil {
+		return nil, err
+	}
+
 	s := &sock{
 		Conn: nil,
 		channels: channels{
@@ -176,7 +167,7 @@ func (s *sock) CloseAll() {
 	s.proxy.stopTor()
 }
 
-func (s *sock) IncomingMsg() ChatMessage {
+func (s *sock) ReadMsg() ChatMessage {
 	msg := <-s.messages
 	return msg
 }
@@ -194,33 +185,18 @@ func (s *sock) Send(msg interface{}) error {
 	return nil
 }
 
-func (s *sock) Start(ctx context.Context) error {
+func (s *sock) Start(ctx context.Context) {
 	s.connect(ctx)
 	s.startWorkers(ctx)
-	return nil
 }
 
 // Create WebSocket connection to the server.
-func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
+func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		err = ctx.Err()
+		return
 	default:
-	}
-
-	// Create new WebSocket dialer, routing through any applicable proxies.
-	newDialer := func() (websocket.Dialer, error) {
-		wd := websocket.Dialer{
-			EnableCompression: true,
-			// Set handshake timeout to 5 mins.
-			HandshakeTimeout: time.Minute * 5,
-		}
-		if s.proxy.dialCtx != nil {
-			// Dial socket through Tor proxy context.
-			wd.NetDialContext = s.proxy.dialCtx
-		}
-
-		return wd, nil
 	}
 
 	// User-Agent string for headers. Can't define a slice as a const.
@@ -234,59 +210,67 @@ func (s *sock) connect(ctx context.Context) (*websocket.Conn, error) {
 
 	s.ClientMsg("Opening socket...")
 
-	dialer, err := newDialer()
-	if err != nil {
-		return nil, err
+	// Create new WebSocket dialer, routing through any applicable proxies.
+	wd := websocket.Dialer{
+		EnableCompression: true,
+		// Set handshake timeout to 5 mins.
+		HandshakeTimeout: time.Minute * 5,
 	}
-	conn, _, err := dialer.Dial(s.url.String(), map[string][]string{
+	if s.proxy.dialCtx != nil {
+		// Dial socket through proxy context.
+		wd.NetDialContext = s.proxy.dialCtx
+	}
+
+	conn, _, err = wd.Dial(s.url.String(), map[string][]string{
 		"Cookie":     s.cookies,
 		"User-Agent": userAgent,
 	})
 	if err != nil {
 		s.ClientMsg("Failed to connect.")
-		return nil, err
+		return
 	}
 	s.ClientMsg("Connected.\n")
 
-	// If in read-only mode, temporarily start the message writer for 30 seconds at most.
+	// If in read-only mode, temporarily start the message writer.
 	// Required to send /join message.
 	if s.readOnly {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*30)
-		go s.msgWriter(ctx)
+		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		go s.msgWriter(ctx)
 	}
 	// Send /join message for desired room.
 	s.Send(fmt.Sprintf("/join %d", s.room))
 
 	// Set s.conn at the end to avoid early access.
 	s.Conn = conn
-	return conn, nil
+	return
 }
 
 // Tries reconnecting 8 times.
-func (s *sock) reconnect(ctx context.Context) (*websocket.Conn, error) {
-	for i := 0; i < 8; {
+func (s *sock) reconnect(ctx context.Context) (conn *websocket.Conn, err error) {
+	for i := 0; i < 8; i++ {
 		select {
 		case <-ctx.Done():
-			return nil, errors.New("Context closed.")
+			err = ctx.Err()
+			return
 		default:
 		}
-		if conn, err := s.connect(ctx); err != nil {
-			// Increment fail count.
-			i++
-		} else {
-			return conn, nil
+
+		conn, err = s.connect(ctx)
+		if err == nil {
+			return
 		}
 	}
 
-	return nil, errors.New("Reconnect failed.")
+	err = errors.New("Reconnect failed.")
+	return
 }
 
 // WebSocket msg writing wrapper.
 // Accepts []byte or string.
 func (s *sock) write(msg interface{}) error {
 	if s.Conn == nil {
-		return errors.New("WebSocket is nil.")
+		return errors.New("Connection is closed.")
 	}
 
 	var out []byte

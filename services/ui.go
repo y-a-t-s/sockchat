@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"html"
 	"regexp"
 	"strings"
 	"time"
@@ -16,11 +15,13 @@ import (
 	"github.com/rivo/tview"
 )
 
+const MAX_LINES = 512
+
 type chatUI struct {
 	*tview.Application
 	flex *tview.Flex
 
-	chat     *chatView
+	chat     *tview.TextView
 	inputBox *tview.InputField
 
 	logger Logger
@@ -33,7 +34,30 @@ func InitUI(ctx context.Context, sock socket.Socket, cfg config.Config, logger L
 	ui.Application = tview.NewApplication()
 	ui.flex = tview.NewFlex().SetDirection(tview.FlexRow)
 
-	ui.chat = ui.newChatView()
+	ui.chat = tview.NewTextView().
+		SetDynamicColors(true).
+		SetMaxLines(MAX_LINES).
+		SetRegions(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			ui.Draw()
+		})
+	// Returns *tview.Box, so keep separate from assignment.
+	ui.chat.SetBorder(false)
+	ui.chat.SetDoneFunc(func(key tcell.Key) {
+		switch key {
+		case tcell.KeyBacktab:
+			if ui.flex == nil || ui.inputBox == nil {
+				return
+			}
+
+			ui.flex.AddItem(ui.inputBox, 1, 1, true)
+			ui.SetFocus(ui.flex)
+		case tcell.KeyCtrlC:
+			ui.Stop()
+		}
+	})
+
 	ui.flex.AddItem(ui.chat, 0, 1, false)
 	if !cfg.ReadOnly {
 		ui.inputBox = ui.newInputBox()
@@ -128,7 +152,7 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 	// IDs of any messages that mention the user. Used for message highlighting.
 	var mentionIDs []string
 	highlightMsg := func(msg *socket.ChatMessage) {
-		beeep.Notify("New mention", html.UnescapeString(msg.MessageRaw), "")
+		beeep.Notify("New mention", msg.MessageRaw, "")
 		mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
 		ui.chat.Highlight(mentionIDs...)
 	}
@@ -149,7 +173,31 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 	}
 
-	var prev socket.ChatMessage
+	printMsg := func(msg *socket.ChatMessage) {
+		// Print chat message, preceded by the sender's username and ID.
+		fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
+			msg.Author.Color(), time.Unix(msg.MessageDate, 0).Format("15:04:05"),
+			msg.Author.UserString(), msg.MessageID, processTags(msg.MessageRaw))
+	}
+
+	var hist []socket.ChatMessage
+
+	editHist := func(msg *socket.ChatMessage) bool {
+		edited := false
+
+		ui.chat.Clear()
+		for i, m := range hist {
+			if m.MessageID == msg.MessageID {
+				hist[i] = *msg
+				edited = true
+			}
+			printMsg(&hist[i])
+		}
+		ui.chat.ScrollToEnd()
+
+		return edited
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -157,28 +205,25 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		default:
 		}
 
-		msg := c.IncomingMsg()
-		// Don't output contiguous duplicates.
-		if msg == prev {
-			continue
-		}
-
-		timestamp := time.Unix(msg.MessageDate, 0)
-		msgStr := html.UnescapeString(msg.MessageRaw)
+		msg := c.ReadMsg()
+		mentionHandler(&msg)
 
 		if ui.logger != nil {
 			ui.logger.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
-				timestamp.Format("2006-01-02 15:04:05 MST"),
-				msg.Author.Username, msg.Author.ID, msgStr))
+				time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
+				msg.Author.Username, msg.Author.ID, msg.MessageRaw))
 		}
 
-		// Print chat message, preceded by the sender's username and ID.
-		fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
-			msg.Author.Color(), timestamp.Format("15:04:05"),
-			msg.Author.UserString(), msg.MessageID, processTags(msgStr))
-		mentionHandler(&msg)
-		ui.chat.ScrollToEnd()
+		if msg.MessageEditDate > 0 && editHist(&msg) {
+			continue
+		}
 
-		prev = msg
+		hist = append(hist, msg)
+		if hl := len(hist); hl > MAX_LINES {
+			hist = hist[hl-MAX_LINES:]
+		}
+
+		printMsg(&msg)
+		ui.chat.ScrollToEnd()
 	}
 }
