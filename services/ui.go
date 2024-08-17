@@ -185,7 +185,10 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 	editHist := func(msg *socket.ChatMessage) bool {
 		edited := false
 
-		ui.chat.Clear()
+		if len(hist) < MAX_LINES {
+			ui.chat.Clear()
+		}
+
 		for i, m := range hist {
 			if m.MessageID == msg.MessageID {
 				hist[i] = *msg

@@ -24,6 +24,6 @@ func TestSocket(t *testing.T) {
 		t.Error(err)
 	}
 
-	s.CloseAll()
+	s.Stop()
 	cancel()
 }

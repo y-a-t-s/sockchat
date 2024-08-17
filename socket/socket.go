@@ -18,7 +18,7 @@ import (
 type Socket interface {
 	ClientMsg(msg string)
 	ClientName() (string, error)
-	CloseAll()
+	Stop()
 	ReadMsg() ChatMessage
 	QueryUser(id string) string
 	Send(msg interface{}) error
@@ -159,7 +159,7 @@ func (s *sock) ClientName() (string, error) {
 	return s.client, nil
 }
 
-func (s *sock) CloseAll() {
+func (s *sock) Stop() {
 	if s.Conn != nil {
 		s.Close()
 		s.Conn = nil
