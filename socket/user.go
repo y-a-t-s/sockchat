@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type User struct {
@@ -36,7 +37,7 @@ func (u User) UserString() string {
 	// [-::U] resets the color like before, while also disabling underlining to print the message.
 	//
 	// See https://github.com/rivo/tview/blob/master/doc.go for more info on style tags.
-	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, u.Username, u.ID, color)
+	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s]):[-::U]", color, strings.ReplaceAll(u.Username, "]", "[]"), u.ID, color)
 }
 
 func (s *sock) QueryUser(id string) string {
