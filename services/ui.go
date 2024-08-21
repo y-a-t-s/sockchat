@@ -1,8 +1,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -173,30 +175,39 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 	}
 
-	printMsg := func(msg *socket.ChatMessage) {
+	msgStr := func(msg *socket.ChatMessage) string {
 		// Print chat message, preceded by the sender's username and ID.
-		fmt.Fprintf(ui.chat, "[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
+		return fmt.Sprintf("[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
 			msg.Author.Color(), time.Unix(msg.MessageDate, 0).Format("15:04:05"),
 			msg.Author.UserString(), msg.MessageID, processTags(msg.MessageRaw))
 	}
 
 	var hist []socket.ChatMessage
 
+	// Edit messages in chat history.
+	bb := bytes.Buffer{}
 	editHist := func(msg *socket.ChatMessage) bool {
+		defer bb.Reset()
 		edited := false
-
-		if len(hist) < MAX_LINES {
-			ui.chat.Clear()
-		}
 
 		for i, m := range hist {
 			if m.MessageID == msg.MessageID {
 				hist[i] = *msg
 				edited = true
 			}
-			printMsg(&hist[i])
+			// Write all lines to a bytes buffer so we can
+			// write to the console in one pass.
+			bb.WriteString(msgStr(&hist[i]))
 		}
-		ui.chat.ScrollToEnd()
+
+		if edited {
+			if len(hist) < MAX_LINES {
+				ui.chat.Clear()
+			}
+
+			bb.WriteTo(ui.chat)
+			ui.chat.ScrollToEnd()
+		}
 
 		return edited
 	}
@@ -226,7 +237,7 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 			hist = hist[hl-MAX_LINES:]
 		}
 
-		printMsg(&msg)
+		io.WriteString(ui.chat, msgStr(&msg))
 		ui.chat.ScrollToEnd()
 	}
 }
