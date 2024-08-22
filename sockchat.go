@@ -32,9 +32,9 @@ import (
 	"sync"
 	"syscall"
 
+	"y-a-t-s/sockchat/chat"
 	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/services"
-	"y-a-t-s/sockchat/socket"
 )
 
 func main() {
@@ -63,41 +63,25 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
 	defer cancel()
 
-	sock, err := socket.NewSocket(ctx, cfg)
+	c, err := chat.NewChat(ctx, cfg)
 	if err != nil {
 		log.Panic(err)
 	}
-	context.AfterFunc(ctx, sock.Stop)
 
 	// WaitGroup for main worker routines.
 	// Ensures all routines terminate before the program exits.
 	var wg sync.WaitGroup
 
-	var l services.Logger
-	if cfg.Logger {
-		l, err = services.NewLogger()
-		if err != nil {
-			log.Panic(err)
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer cancel()
-			l.Start(ctx)
-		}()
-	}
-
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		sock.Start(ctx)
+		c.Start(ctx)
 	}()
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		services.InitUI(ctx, sock, cfg, l)
+		services.StartTUI(ctx, c)
 	}()
 	wg.Wait()
-	cancel()
 }

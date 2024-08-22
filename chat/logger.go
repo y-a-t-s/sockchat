@@ -1,4 +1,4 @@
-package services
+package chat
 
 import (
 	"bufio"
@@ -12,20 +12,15 @@ import (
 	"time"
 )
 
-type Logger interface {
-	Log(entry string) error
-	Start(ctx context.Context)
-}
-
 type logger struct {
 	*bufio.Writer
-	feed chan string
+	feed chan *ChatMessage
 }
 
-func NewLogger() (Logger, error) {
+func (l *logger) Start(ctx context.Context) error {
 	cfgDir, err := os.UserConfigDir()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	logDir := filepath.Join(cfgDir, "sockchat/logs")
 
@@ -34,11 +29,11 @@ func NewLogger() (Logger, error) {
 
 	err = os.Mkdir(logDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, err
+		return err
 	}
 	err = os.Mkdir(outDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, err
+		return err
 	}
 
 	dateFmt := "2006-01-02 15:04:05 MST"
@@ -49,32 +44,39 @@ func NewLogger() (Logger, error) {
 	logPath := filepath.Join(outDir, fmt.Sprintf("%s.log", t.Format(dateFmt)))
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &logger{
-		bufio.NewWriter(logFile),
-		make(chan string, 1024),
-	}, nil
-}
+	l.Writer = bufio.NewWriter(logFile)
+	l.feed = make(chan *ChatMessage, 1024)
 
-func (l *logger) Log(entry string) error {
-	if l.Writer == nil {
-		return errors.New("Log writer is closed.")
-	}
+	defer func() {
+		l.Flush()
+		logFile.Close()
+		l.feed = nil
+	}()
 
-	l.feed <- entry
-	return nil
-}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-func (l *logger) Start(ctx context.Context) {
-	defer l.Flush()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-l.feed:
-			l.WriteString(msg)
+	context.AfterFunc(ctx, func() {
+		close(l.feed)
+	})
+
+	logFmt := "[%s] [%s (#%d)]%s: %s\n"
+	for msg := range l.feed {
+		if l.Writer == nil {
+			return errors.New("Log writer is closed.")
 		}
+
+		fl := ""
+		if msg.IsEdited() {
+			fl += "*"
+		}
+
+		fmt.Fprintf(l, logFmt, time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
+			msg.Author.Username, msg.Author.ID, fl, msg.MessageRaw)
 	}
+
+	return nil
 }

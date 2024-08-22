@@ -6,47 +6,45 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
-	"y-a-t-s/sockchat/config"
-	"y-a-t-s/sockchat/socket"
+	"y-a-t-s/sockchat/chat"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/gen2brain/beeep"
 	"github.com/rivo/tview"
 )
 
-const MAX_LINES = 512
-
-type chatUI struct {
+type TUI struct {
 	*tview.Application
-	flex *tview.Flex
 
-	chat     *tview.TextView
+	flex     *tview.Flex
+	Console  *tview.TextView
 	inputBox *tview.InputField
 
-	logger Logger
-	sock   socket.Socket
+	Chat *chat.Chat
 }
 
-func InitUI(ctx context.Context, sock socket.Socket, cfg config.Config, logger Logger) {
-	ui := chatUI{}
+func StartTUI(ctx context.Context, c *chat.Chat) {
+	ui := TUI{}
 
 	ui.Application = tview.NewApplication()
+	ui.Chat = c
 	ui.flex = tview.NewFlex().SetDirection(tview.FlexRow)
 
-	ui.chat = tview.NewTextView().
+	ui.Console = tview.NewTextView().
 		SetDynamicColors(true).
-		SetMaxLines(MAX_LINES).
+		SetMaxLines(chat.HIST_LEN).
 		SetRegions(true).
 		SetScrollable(true).
 		SetChangedFunc(func() {
 			ui.Draw()
 		})
 	// Returns *tview.Box, so keep separate from assignment.
-	ui.chat.SetBorder(false)
-	ui.chat.SetDoneFunc(func(key tcell.Key) {
+	ui.Console.SetBorder(false)
+	ui.Console.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyBacktab:
 			if ui.flex == nil || ui.inputBox == nil {
@@ -60,22 +58,19 @@ func InitUI(ctx context.Context, sock socket.Socket, cfg config.Config, logger L
 		}
 	})
 
-	ui.flex.AddItem(ui.chat, 0, 1, false)
-	if !cfg.ReadOnly {
+	ui.flex.AddItem(ui.Console, 0, 1, false)
+	if !ui.Chat.Cfg.ReadOnly {
 		ui.inputBox = ui.newInputBox()
 		ui.flex.AddItem(ui.inputBox, 1, 1, true)
 	}
 
 	ui.SetRoot(ui.flex, true).SetFocus(ui.flex)
 
-	ui.logger = logger
-	ui.sock = sock
-
-	go ui.incomingHandler(ctx, sock)
+	go ui.incomingHandler(ctx)
 	ui.Run()
 }
 
-func (ui *chatUI) newInputBox() *tview.InputField {
+func (ui *TUI) newInputBox() *tview.InputField {
 	ib := tview.NewInputField().
 		// Idk what the site caps it at.
 		SetAcceptanceFunc(tview.InputFieldMaxLength(2048)).
@@ -86,9 +81,14 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 
 	tabHandler := func(msg string) string {
 		return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
-			id := m[1:]
-			if u := ui.sock.QueryUser(id); u != id {
-				return fmt.Sprintf("@%s,", u)
+			id, err := strconv.Atoi(m[1:])
+			if err != nil {
+				// TODO: Better handling.
+				return ""
+			}
+
+			if u := ui.Chat.Users.QueryUser(uint32(id)); u != nil {
+				return fmt.Sprintf("@%s,", u.Username)
 			}
 
 			return m
@@ -98,24 +98,20 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 	ib.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
-			if ui.sock == nil {
-				return
-			}
-
 			msg := strings.TrimSpace(ib.GetText())
 			// Add outgoing message to queue.
-			ui.sock.Send(msg)
+			ui.Chat.Out <- msg
 			ib.SetText("")
 		case tcell.KeyTab:
 			msg := ib.GetText()
 			ib.SetText(tabHandler(msg))
 		case tcell.KeyBacktab:
-			if ui.chat == nil || ui.flex == nil {
+			if ui.Console == nil || ui.flex == nil {
 				return
 			}
 
 			ui.flex.RemoveItem(ib)
-			ui.SetFocus(ui.chat)
+			ui.SetFocus(ui.Console)
 		case tcell.KeyCtrlC:
 			ui.Stop()
 		}
@@ -125,7 +121,9 @@ func (ui *chatUI) newInputBox() *tview.InputField {
 	return ib
 }
 
-func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
+func (ui *TUI) incomingHandler(ctx context.Context) {
+	// TODO: Make less stupid
+
 	processTags := func(msg string) string {
 		tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
 		return tagRE.ReplaceAllStringFunc(msg, func(tag string) string {
@@ -153,18 +151,17 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 
 	// IDs of any messages that mention the user. Used for message highlighting.
 	var mentionIDs []string
-	highlightMsg := func(msg *socket.ChatMessage) {
+	highlightMsg := func(msg *chat.ChatMessage) {
 		beeep.Notify("New mention", msg.MessageRaw, "")
-		mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-		ui.chat.Highlight(mentionIDs...)
+		mentionIDs = append(mentionIDs, string(msg.MessageID))
+		ui.Console.Highlight(mentionIDs...)
 	}
 
 	var mentionRE *regexp.Regexp
-	mentionHandler := func(msg *socket.ChatMessage) {
+	mentionHandler := func(msg *chat.ChatMessage) {
 		if mentionRE == nil {
-			clientName, err := c.ClientName()
-			// GetClientName() returns err if client's user data has not been recorded yet.
-			if err != nil {
+			clientName := ui.Chat.ClientUsername
+			if clientName == "" {
 				return
 			}
 			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", clientName))
@@ -175,69 +172,55 @@ func (ui *chatUI) incomingHandler(ctx context.Context, c socket.Socket) {
 		}
 	}
 
-	msgStr := func(msg *socket.ChatMessage) string {
+	msgStr := func(msg *chat.ChatMessage) string {
+		fl := ""
+		if msg.MessageEditDate != 0 {
+			fl = "[::d]*[::D]"
+		}
+
 		// Print chat message, preceded by the sender's username and ID.
 		return fmt.Sprintf("[%s::u]%s[-::U] %s [\"%d\"]%s[\"\"][-:-:-:-]\n",
 			msg.Author.Color(), time.Unix(msg.MessageDate, 0).Format("15:04:05"),
-			msg.Author.UserString(), msg.MessageID, processTags(msg.MessageRaw))
+			msg.Author.String(fl), msg.MessageID, processTags(msg.MessageRaw))
 	}
-
-	var hist []socket.ChatMessage
 
 	// Edit messages in chat history.
 	bb := bytes.Buffer{}
-	editHist := func(msg *socket.ChatMessage) bool {
-		defer bb.Reset()
-		edited := false
-
-		for i, m := range hist {
-			if m.MessageID == msg.MessageID {
-				hist[i] = *msg
-				edited = true
-			}
-			// Write all lines to a bytes buffer so we can
-			// write to the console in one pass.
-			bb.WriteString(msgStr(&hist[i]))
-		}
-
-		if edited {
-			if len(hist) < MAX_LINES {
-				ui.chat.Clear()
-			}
-
-			bb.WriteTo(ui.chat)
-			ui.chat.ScrollToEnd()
-		}
-
-		return edited
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case hc, ok := <-ui.Chat.History:
+			if hc == nil || !ok {
+				continue
+			}
+
+			n := 0
+			for m := range hc {
+				if m != nil {
+					bb.WriteString(msgStr(m))
+					n++
+				}
+			}
+			if n > 0 {
+				if n < chat.HIST_LEN {
+					ui.Console.Clear()
+				}
+
+				bb.WriteTo(ui.Console)
+				ui.Console.ScrollToEnd()
+				bb.Reset()
+			}
+		case msg, ok := <-ui.Chat.Messages:
+			if msg == nil || !ok {
+				continue
+			}
+
+			mentionHandler(msg)
+
+			io.WriteString(ui.Console, msgStr(msg))
+			ui.Console.ScrollToEnd()
+
 		}
-
-		msg := c.ReadMsg()
-		mentionHandler(&msg)
-
-		if ui.logger != nil {
-			ui.logger.Log(fmt.Sprintf("[%s] [%s (#%d)]: %s\n",
-				time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
-				msg.Author.Username, msg.Author.ID, msg.MessageRaw))
-		}
-
-		if msg.MessageEditDate > 0 && editHist(&msg) {
-			continue
-		}
-
-		hist = append(hist, msg)
-		if hl := len(hist); hl > MAX_LINES {
-			hist = hist[hl-MAX_LINES:]
-		}
-
-		io.WriteString(ui.chat, msgStr(&msg))
-		ui.chat.ScrollToEnd()
 	}
 }
