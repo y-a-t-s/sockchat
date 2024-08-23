@@ -34,7 +34,7 @@ func NewChat(ctx context.Context, cfg config.Config) (c *Chat, err error) {
 		ClientID: cfg.UserID,
 		Users:    newUserTable(),
 		History:  make(chan chan *ChatMessage, 4),
-		Messages: make(chan *ChatMessage, cap(s.Messages)),
+		Messages: make(chan *ChatMessage, cap(s.messages)),
 		Out:      make(chan string, cap(s.out)),
 	}
 
@@ -66,52 +66,67 @@ func (c *Chat) Start(ctx context.Context) {
 }
 
 func (c *Chat) router(ctx context.Context) {
-	var hist []*ChatMessage
-	prevID := uint32(0)
+	newHistChan := func() chan *ChatMessage {
+		return make(chan *ChatMessage, HIST_LEN)
+	}
 
-	appendHist := func(msg *ChatMessage) (appended bool) {
-		switch {
-		case msg.IsEdited() && msg.MessageID <= prevID:
-			hc := make(chan *ChatMessage, len(hist))
-			for i := range hist {
-				if msg.MessageID == hist[i].MessageID {
-					hist[i] = msg
-				}
-				hc <- hist[i]
+	splitChan := func(msg *ChatMessage, ch chan *ChatMessage) (chan *ChatMessage, chan *ChatMessage) {
+		close(ch)
+
+		a, b := newHistChan(), newHistChan()
+
+		for m := range ch {
+			if msg.MessageID == m.MessageID {
+				c.sock.pool.Release(m)
+				m = msg
 			}
-			close(hc)
-			c.History <- hc
-		default:
-			hist = append(hist, msg)
-			if hl := len(hist); hl > HIST_LEN {
-				if hist[0].Author.ID != 0 {
-					c.sock.pool.Release(hist[0])
-				}
-				hist = hist[hl-HIST_LEN:]
-			}
-			prevID = msg.MessageID
-			appended = true
+
+			a <- m
+			b <- m
 		}
 
-		return appended
+		return a, b
 	}
+
+	hist := newHistChan()
+	hl := 0
+
+	prevID := uint32(0)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-c.sock.Messages:
+		case msg, ok := <-c.sock.messages:
 			if msg == nil || !ok {
 				continue
 			}
 
-			go c.Users.Add(msg.Author)
+			c.sock.userData <- msg.Author
 
 			if c.logger.feed != nil {
 				c.logger.feed <- msg
 			}
-			if appendHist(msg) {
+
+			switch {
+			case msg.IsEdited() && msg.MessageID <= prevID:
+				// Split hist into 2 new channels.
+				hc, nc := splitChan(msg, hist)
+				close(hc)
+
+				c.History <- hc
+				hist = nc
+			default:
+				hl++
+				if hl > HIST_LEN {
+					c.sock.pool.Release(<-hist)
+					hl--
+				}
+
+				hist <- msg
 				c.Messages <- msg
+
+				prevID = msg.MessageID
 			}
 		case m, ok := <-c.Out:
 			if !ok {
@@ -120,11 +135,14 @@ func (c *Chat) router(ctx context.Context) {
 
 			c.sock.out <- m
 		case u, ok := <-c.sock.userData:
-			if u == nil || !ok {
+			switch {
+			case !ok:
 				continue
+			case u.ID == uint32(c.Cfg.UserID):
+				c.ClientUsername = u.Username
 			}
 
-			go c.Users.Add(*u)
+			go c.Users.Add(u)
 		}
 	}
 }

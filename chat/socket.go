@@ -21,8 +21,8 @@ type sock struct {
 	*websocket.Conn
 	pool msgPool
 
-	Messages chan *ChatMessage
-	userData chan *User
+	messages chan *ChatMessage
+	userData chan User
 
 	out chan string
 
@@ -78,8 +78,8 @@ func NewSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 	s = &sock{
 		Conn:     nil,
 		pool:     newMsgPool(),
-		Messages: make(chan *ChatMessage, 1024),
-		userData: make(chan *User, 512),
+		messages: make(chan *ChatMessage, 1024),
+		userData: make(chan User, 512),
 		out:      make(chan string, 16),
 		cookies:  cfg.Args,
 		readOnly: cfg.ReadOnly,
@@ -153,7 +153,7 @@ func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 		s.Conn = nil
 	}
 
-	s.Messages <- ClientMsg("Opening socket...")
+	s.messages <- ClientMsg("Opening socket...")
 
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
@@ -171,10 +171,10 @@ func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 		"User-Agent": userAgent,
 	})
 	if err != nil {
-		s.Messages <- ClientMsg("Failed to connect.")
+		s.messages <- ClientMsg("Failed to connect.")
 		return
 	}
-	s.Messages <- ClientMsg("Connected.\n")
+	s.messages <- ClientMsg("Connected.\n")
 
 	conn.EnableWriteCompression(true)
 	// Send /join message for desired room.
@@ -214,7 +214,7 @@ func (s *sock) write(msg string) error {
 
 	out := bytes.TrimSpace([]byte(msg))
 	if err := s.WriteMessage(websocket.TextMessage, out); err != nil {
-		s.Messages <- ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
+		s.messages <- ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
 		return err
 	}
 
@@ -236,9 +236,9 @@ func (s *sock) msgReader(ctx context.Context) {
 
 		_, msg, err := s.ReadMessage()
 		if err != nil {
-			s.Messages <- ClientMsg("Failed to read from socket.\n")
+			s.messages <- ClientMsg("Failed to read from socket.\n")
 			if _, err := s.reconnect(ctx); err != nil {
-				s.Messages <- ClientMsg("Max retries reached. Waiting 15 seconds.")
+				s.messages <- ClientMsg("Max retries reached. Waiting 15 seconds.")
 				time.Sleep(time.Second * 15)
 			}
 			continue

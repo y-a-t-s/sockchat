@@ -32,24 +32,23 @@ func (s *sock) parseResponse(msg []byte) error {
 		for jd.More() {
 			switch out.(type) {
 			case *ChatMessage:
-				out = new(ChatMessage)
-				if err := jd.Decode(out); err != nil {
+				msg := s.pool.NewMsg()
+
+				if err := jd.Decode(msg); err != nil {
 					errs = append(errs, err)
 					continue
 				}
-
-				msg := out.(*ChatMessage)
 				msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 
-				s.Messages <- msg
+				s.messages <- msg
 			case *User:
-				out = new(User)
-				if err := jd.Decode(out); err != nil {
+				u := User{}
+				if err := jd.Decode(&u); err != nil {
 					errs = append(errs, err)
 					continue
 				}
 
-				s.userData <- out.(*User)
+				s.userData <- u
 			}
 		}
 
@@ -59,7 +58,7 @@ func (s *sock) parseResponse(msg []byte) error {
 	// Server sometimes sends plaintext messages to client.
 	// This typically happens when it sends error messages.
 	if !json.Valid(msg) {
-		s.Messages <- ClientMsg(string(msg))
+		s.messages <- ClientMsg(string(msg))
 	}
 
 	var sm serverResp

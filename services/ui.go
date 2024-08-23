@@ -184,8 +184,9 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			msg.Author.String(fl), msg.MessageID, processTags(msg.MessageRaw))
 	}
 
-	// Edit messages in chat history.
+	// Buffer for chat history rewrites.
 	bb := bytes.Buffer{}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,25 +203,22 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 					n++
 				}
 			}
-			if n > 0 {
-				if n < chat.HIST_LEN {
-					ui.Console.Clear()
-				}
 
-				bb.WriteTo(ui.Console)
-				ui.Console.ScrollToEnd()
-				bb.Reset()
+			if n < chat.HIST_LEN {
+				ui.Console.Clear()
 			}
+			bb.WriteTo(ui.Console)
+			ui.Console.ScrollToEnd()
+
+			bb.Reset()
 		case msg, ok := <-ui.Chat.Messages:
 			if msg == nil || !ok {
 				continue
 			}
 
-			mentionHandler(msg)
-
 			io.WriteString(ui.Console, msgStr(msg))
+			mentionHandler(msg)
 			ui.Console.ScrollToEnd()
-
 		}
 	}
 }
