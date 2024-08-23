@@ -153,7 +153,7 @@ func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 		s.Conn = nil
 	}
 
-	s.messages <- ClientMsg("Opening socket...")
+	s.ClientMsg("Opening socket...")
 
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
@@ -171,10 +171,10 @@ func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 		"User-Agent": userAgent,
 	})
 	if err != nil {
-		s.messages <- ClientMsg("Failed to connect.")
+		s.ClientMsg("Failed to connect.")
 		return
 	}
-	s.messages <- ClientMsg("Connected.\n")
+	s.ClientMsg("Connected.\n")
 
 	conn.EnableWriteCompression(true)
 	// Send /join message for desired room.
@@ -214,7 +214,7 @@ func (s *sock) write(msg string) error {
 
 	out := bytes.TrimSpace([]byte(msg))
 	if err := s.WriteMessage(websocket.TextMessage, out); err != nil {
-		s.messages <- ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
+		s.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
 		return err
 	}
 
@@ -236,9 +236,9 @@ func (s *sock) msgReader(ctx context.Context) {
 
 		_, msg, err := s.ReadMessage()
 		if err != nil {
-			s.messages <- ClientMsg("Failed to read from socket.\n")
+			s.ClientMsg("Failed to read from socket.\n")
 			if _, err := s.reconnect(ctx); err != nil {
-				s.messages <- ClientMsg("Max retries reached. Waiting 15 seconds.")
+				s.ClientMsg("Max retries reached. Waiting 15 seconds.")
 				time.Sleep(time.Second * 15)
 			}
 			continue

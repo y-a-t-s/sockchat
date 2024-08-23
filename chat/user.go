@@ -77,10 +77,6 @@ func (ut *userTable) QueryUser(id uint32) *User {
 		ut.mutex.Unlock()
 	}()
 
-	if u, ok := <-q; ok && u != nil {
-		return u
-	}
-
-	// Return nil if no matching user record was found.
-	return nil
+	// Returns nil if no matching user record was found.
+	return <-q
 }

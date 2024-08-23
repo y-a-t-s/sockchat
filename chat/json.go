@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 )
 
@@ -58,12 +59,13 @@ func (s *sock) parseResponse(msg []byte) error {
 	// Server sometimes sends plaintext messages to client.
 	// This typically happens when it sends error messages.
 	if !json.Valid(msg) {
-		s.messages <- ClientMsg(string(msg))
+		s.ClientMsg(string(msg))
+		return nil
 	}
 
 	var sm serverResp
 	if err := json.Unmarshal(msg, &sm); err != nil {
-		// s.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
+		s.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
 		return err
 	}
 

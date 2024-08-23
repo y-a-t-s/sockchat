@@ -16,30 +16,12 @@ type ChatMessage struct {
 	RoomID          uint16 `json:"room_id"`
 }
 
-func ClientMsg(body string) *ChatMessage {
-	return &ChatMessage{
-		Author: User{
-			ID:       0,
-			Username: "sockchat",
-		},
-		MessageDate: time.Now().Unix(),
-		Message:     html.EscapeString(body),
-		MessageRaw:  body,
-	}
-}
-
 func (msg *ChatMessage) IsEdited() bool {
 	return msg.MessageEditDate > 0
 }
 
 func (msg *ChatMessage) Reset() {
-	msg.Author = User{}
-	msg.Message = ""
-	msg.MessageRaw = ""
-	msg.MessageID = 0
-	msg.MessageDate = 0
-	msg.MessageEditDate = 0
-	msg.RoomID = 0
+	*msg = ChatMessage{}
 }
 
 type msgPool struct {
@@ -62,4 +44,19 @@ func (mp *msgPool) NewMsg() *ChatMessage {
 
 func (mp *msgPool) Release(msg *ChatMessage) {
 	mp.pool.Put(msg)
+}
+
+func (s *sock) ClientMsg(body string) {
+	msg := s.pool.NewMsg()
+	*msg = ChatMessage{
+		Author: User{
+			ID:       0,
+			Username: "sockchat",
+		},
+		MessageDate: time.Now().Unix(),
+		Message:     html.EscapeString(body),
+		MessageRaw:  body,
+	}
+
+	s.messages <- msg
 }

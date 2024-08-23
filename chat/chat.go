@@ -8,8 +8,8 @@ import (
 )
 
 type Chat struct {
-	sock *sock
-	Cfg  config.Config
+	*sock
+	Cfg config.Config
 
 	ClientID       int
 	ClientUsername string
@@ -70,6 +70,7 @@ func (c *Chat) router(ctx context.Context) {
 		return make(chan *ChatMessage, HIST_LEN)
 	}
 
+	// Split (copy) channel while applying any edits in msg.
 	splitChan := func(msg *ChatMessage, ch chan *ChatMessage) (chan *ChatMessage, chan *ChatMessage) {
 		close(ch)
 
@@ -89,8 +90,10 @@ func (c *Chat) router(ctx context.Context) {
 	}
 
 	hist := newHistChan()
+	// Length tracker.
+	// Once we reach the max, the oldest msgs get popped off the feed.
 	hl := 0
-
+	// ID of previously processed msg.
 	prevID := uint32(0)
 
 	for {
@@ -109,18 +112,26 @@ func (c *Chat) router(ctx context.Context) {
 			}
 
 			switch {
+			// We need to check if the msg was edited and if it's an edit of a msg we already received.
+			// Msgs may be edited, but were edited before the client connected.
+			// Edits of existing msgs will appear with an older or same ID than the previous msg.
 			case msg.IsEdited() && msg.MessageID <= prevID:
 				// Split hist into 2 new channels.
 				hc, nc := splitChan(msg, hist)
-				close(hc)
 
+				// Close then send one to the history updates feed.
+				close(hc)
 				c.History <- hc
+
+				// Point hist to the other copy.
 				hist = nc
 			default:
-				hl++
-				if hl > HIST_LEN {
+				switch {
+				case hl < HIST_LEN:
+					hl++
+				default:
+					// Release oldest msg to pool before it's discarded.
 					c.sock.pool.Release(<-hist)
-					hl--
 				}
 
 				hist <- msg
@@ -138,7 +149,7 @@ func (c *Chat) router(ctx context.Context) {
 			switch {
 			case !ok:
 				continue
-			case u.ID == uint32(c.Cfg.UserID):
+			case c.ClientUsername == "" && u.ID == uint32(c.Cfg.UserID):
 				c.ClientUsername = u.Username
 			}
 
