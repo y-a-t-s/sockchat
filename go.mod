@@ -1,6 +1,6 @@
 module y-a-t-s/sockchat
 
-go 1.22.6
+go 1.23.0
 
 require (
 	github.com/cretz/bine v0.2.0
@@ -8,6 +8,7 @@ require (
 	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
 	github.com/gorilla/websocket v1.5.3
 	github.com/rivo/tview v0.0.0-20240818110301-fd649dbf1223
+	github.com/y-a-t-s/libkiwi v0.0.0-20240826135644-75e9ecd9dcbf
 	golang.org/x/net v0.28.0
 )
 
@@ -20,6 +21,7 @@ require (
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
+	github.com/y-a-t-s/firebird v0.0.0-20240702142028-fc2f2361cb95 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/sys v0.23.0 // indirect
 	golang.org/x/term v0.23.0 // indirect

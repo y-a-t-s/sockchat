@@ -15,23 +15,24 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Max chat history length.
 const HIST_LEN = 512
+
+// User-Agent string for headers.
+const USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"
 
 type sock struct {
 	*websocket.Conn
-	pool msgPool
 
 	messages chan *ChatMessage
-	userData chan User
 
-	out chan string
+	Out chan string
 
 	cookies  []string
 	readOnly bool
 	room     uint
 	url      *url.URL
-
-	proxy socksProxy
+	proxy    *socksProxy
 }
 
 // Split the protocol part from addresses in the config, if present.
@@ -49,7 +50,7 @@ func splitProtocol(addr string) (string, string, error) {
 	return tmp[1], tmp[2], nil
 }
 
-func NewSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
+func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 	parseProxyAddr := func() (u *url.URL, err error) {
 		proto, addr, err := splitProtocol(cfg.Proxy.Addr)
 		if err != nil {
@@ -75,13 +76,16 @@ func NewSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 		return
 	}
 
+	cookies := cfg.Args
+	if !strings.Contains(cookies[0], "xf_session=") {
+		cookies[0] = "xf_session=; " + cookies[0]
+	}
+
 	s = &sock{
 		Conn:     nil,
-		pool:     newMsgPool(),
 		messages: make(chan *ChatMessage, 1024),
-		userData: make(chan User, 512),
-		out:      make(chan string, 16),
-		cookies:  cfg.Args,
+		Out:      make(chan string, 16),
+		cookies:  cookies,
 		readOnly: cfg.ReadOnly,
 		room:     cfg.Room,
 	}
@@ -103,7 +107,7 @@ func NewSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 		if err != nil {
 			return nil, err
 		}
-		p, err := newSocksDialer(*addr)
+		p, err := newSocksDialer(addr)
 		if err != nil {
 			return nil, err
 		}
@@ -133,27 +137,21 @@ func (s *sock) Stop() {
 		s.Close()
 		s.Conn = nil
 	}
-	s.proxy.stopTor()
+	if s.proxy != nil {
+		s.proxy.stopTor()
+	}
+	close(s.Out)
 }
 
-func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
+func (s *sock) connect(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		err = ctx.Err()
-		return
+		return ctx.Err()
 	default:
 	}
 
-	// User-Agent string for headers. Can't define a slice as a const.
-	userAgent := []string{"Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"}
-
-	// Close if necessary before reconnecting.
-	if s.Conn != nil {
-		s.Close()
-		s.Conn = nil
-	}
-
-	s.ClientMsg("Opening socket...")
+	// Close if necessary before connecting.
+	s.disconnect()
 
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
@@ -161,67 +159,71 @@ func (s *sock) connect(ctx context.Context) (conn *websocket.Conn, err error) {
 		// Set handshake timeout to 5 mins.
 		HandshakeTimeout: time.Minute * 5,
 	}
-	if s.proxy.dialCtx != nil {
+	if s.proxy != nil {
 		// Dial socket through proxy context.
-		wd.NetDialContext = s.proxy.dialCtx
+		wd.NetDialContext = s.proxy.DialContext
 	}
 
-	conn, _, err = wd.DialContext(ctx, s.url.String(), map[string][]string{
+	// UA defined up here to make the redundant slice warning fuck off.
+	ua := []string{USER_AGENT}
+	conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
 		"Cookie":     s.cookies,
-		"User-Agent": userAgent,
+		"User-Agent": ua,
 	})
 	if err != nil {
-		s.ClientMsg("Failed to connect.")
-		return
+		return err
 	}
-	s.ClientMsg("Connected.\n")
 
 	conn.EnableWriteCompression(true)
 	// Send /join message for desired room.
-	s.out <- fmt.Sprintf("/join %d", s.room)
+	s.Out <- fmt.Sprintf("/join %d", s.room)
 
 	// Set s.conn at the end to avoid early access.
 	s.Conn = conn
-	return
+	return nil
+}
+
+func (s *sock) disconnect() {
+	if s.Conn != nil {
+		s.Conn.Close()
+		s.Conn = nil
+	}
 }
 
 // Tries reconnecting 8 times.
-func (s *sock) reconnect(ctx context.Context) (conn *websocket.Conn, err error) {
+func (s *sock) reconnect(ctx context.Context) error {
 	for i := 0; i < 8; i++ {
 		select {
 		case <-ctx.Done():
-			err = ctx.Err()
-			return
+			return ctx.Err()
 		default:
 		}
 
-		conn, err = s.connect(ctx)
+		err := s.connect(ctx)
 		if err == nil {
-			return
+			return nil
 		}
 	}
 
-	err = errors.New("Reconnect failed.")
-	return
+	return errors.New("Reconnect failed.")
 }
 
 // WebSocket msg writing wrapper. Not thread safe by itself.
 // Accepts []byte or string.
 func (s *sock) write(msg string) error {
 	if s.Conn == nil {
-		return errors.New("Connection is closed.")
+		return errors.New("Socket is closed.")
 	}
 
 	out := bytes.TrimSpace([]byte(msg))
 	if err := s.WriteMessage(websocket.TextMessage, out); err != nil {
-		s.ClientMsg(fmt.Sprintf("Failed to send: %s", msg))
 		return err
 	}
 
 	return nil
 }
 
-func (s *sock) msgReader(ctx context.Context) {
+func (c *Chat) msgReader(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,53 +231,39 @@ func (s *sock) msgReader(ctx context.Context) {
 		default:
 		}
 
-		if s.Conn == nil {
-			s.connect(ctx)
-			continue
-		}
-
-		_, msg, err := s.ReadMessage()
-		if err != nil {
-			s.ClientMsg("Failed to read from socket.\n")
-			if _, err := s.reconnect(ctx); err != nil {
-				s.ClientMsg("Max retries reached. Waiting 15 seconds.")
+		if c.sock.Conn == nil {
+			c.ClientMsg("Opening socket...")
+			err := c.sock.reconnect(ctx)
+			if err != nil {
+				c.ClientMsg("Failed to connect 8 times. Waiting 15 seconds.")
 				time.Sleep(time.Second * 15)
-			}
-			continue
-		}
-
-		s.parseResponse(msg)
-	}
-}
-
-func (s *sock) router(ctx context.Context) {
-	joinRE := regexp.MustCompile(`^/join \d+`)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case m, ok := <-s.out:
-			if m == "" || !ok {
 				continue
 			}
+			c.ClientMsg("Connected.\n")
+			continue
+		}
 
-			if !s.readOnly || joinRE.MatchString(m) {
-				s.write(m)
+		_, msg, err := c.sock.ReadMessage()
+		if err != nil {
+			c.ClientMsg("Failed to read from socket.\n")
+			c.sock.Conn = nil
+			continue
+		}
+
+		err = c.parseResponse(msg)
+		if err != nil {
+			errMsg := err.Error()
+			c.ClientMsg(errMsg)
+
+			if strings.Contains(errMsg, "cannot join") {
+				tk, err := c.kf.RefreshSession()
+				if err != nil {
+					continue
+				}
+				c.sock.cookies[0] = regexp.MustCompile(`xf_session=.*`).
+					ReplaceAllString(c.sock.cookies[0], tk)
+				c.sock.disconnect()
 			}
 		}
 	}
-}
-
-func (s *sock) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	stopf := context.AfterFunc(ctx, func() {
-		close(s.out)
-		s.Stop()
-	})
-	defer stopf()
-
-	go s.msgReader(ctx)
-	s.router(ctx)
 }

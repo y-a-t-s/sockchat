@@ -14,7 +14,7 @@ type serverResp struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (s *sock) parseResponse(msg []byte) error {
+func (c *Chat) parseResponse(msg []byte) error {
 	if msg == nil || len(msg) == 0 {
 		return errors.New("Received empty message from server.")
 	}
@@ -33,7 +33,7 @@ func (s *sock) parseResponse(msg []byte) error {
 		for jd.More() {
 			switch out.(type) {
 			case *ChatMessage:
-				msg := s.pool.NewMsg()
+				msg := c.pool.NewMsg()
 
 				if err := jd.Decode(msg); err != nil {
 					errs = append(errs, err)
@@ -41,15 +41,26 @@ func (s *sock) parseResponse(msg []byte) error {
 				}
 				msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 
-				s.messages <- msg
+				if qu := c.Users.QueryUser(msg.Author.ID); qu != nil {
+					c.pool.Release(msg.Author)
+					msg.Author = qu
+				} else {
+					go c.Users.Add(msg.Author)
+				}
+
+				c.sock.messages <- msg
 			case *User:
-				u := User{}
+				u := c.pool.NewUser()
 				if err := jd.Decode(&u); err != nil {
 					errs = append(errs, err)
 					continue
 				}
 
-				s.userData <- u
+				go func() {
+					if !c.Users.Add(u) {
+						c.pool.Release(u)
+					}
+				}()
 			}
 		}
 
@@ -59,14 +70,12 @@ func (s *sock) parseResponse(msg []byte) error {
 	// Server sometimes sends plaintext messages to client.
 	// This typically happens when it sends error messages.
 	if !json.Valid(msg) {
-		s.ClientMsg(string(msg))
-		return nil
+		return errors.New(string(msg))
 	}
 
 	var sm serverResp
 	if err := json.Unmarshal(msg, &sm); err != nil {
-		s.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
-		return err
+		return errors.New(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
 	}
 
 	if len(sm.Users) > 0 {

@@ -50,22 +50,26 @@ func (u *User) String(fl string) string {
 
 type userTable struct {
 	users map[uint32]*User
-	mutex sync.Mutex
+	mutex *sync.Mutex
 }
 
 func newUserTable() *userTable {
 	return &userTable{
 		users: make(map[uint32]*User, 512),
+		mutex: &sync.Mutex{},
 	}
 }
 
-func (ut *userTable) Add(u User) {
+func (ut *userTable) Add(u *User) bool {
 	ut.mutex.Lock()
 	defer ut.mutex.Unlock()
 
 	if ut.users[u.ID] == nil {
-		ut.users[u.ID] = &u
+		ut.users[u.ID] = u
+		return true
 	}
+
+	return false
 }
 
 func (ut *userTable) QueryUser(id uint32) *User {

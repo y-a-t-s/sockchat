@@ -2,28 +2,46 @@ package chat
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"regexp"
 	"sync"
 
 	"y-a-t-s/sockchat/config"
+
+	"github.com/y-a-t-s/libkiwi"
 )
 
 type Chat struct {
 	*sock
 	Cfg config.Config
+	kf  *libkiwi.KF
 
 	ClientID       int
 	ClientUsername string
 
 	Users  *userTable
+	pool   ChatPool
 	logger logger
 
 	History  chan chan *ChatMessage
 	Messages chan *ChatMessage
-	Out      chan string
 }
 
 func NewChat(ctx context.Context, cfg config.Config) (c *Chat, err error) {
-	s, err := NewSocket(ctx, cfg)
+	s, err := newSocket(ctx, cfg)
+	if err != nil {
+		return
+	}
+
+	hc := http.Client{}
+	if s.proxy != nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = s.proxy.DialContext
+		hc.Transport = tr
+	}
+
+	kf, err := libkiwi.NewKF(hc, cfg.Host, cfg.Args[0])
 	if err != nil {
 		return
 	}
@@ -31,11 +49,12 @@ func NewChat(ctx context.Context, cfg config.Config) (c *Chat, err error) {
 	c = &Chat{
 		sock:     s,
 		Cfg:      cfg,
+		kf:       kf,
 		ClientID: cfg.UserID,
 		Users:    newUserTable(),
+		pool:     newChatPool(),
 		History:  make(chan chan *ChatMessage, 4),
 		Messages: make(chan *ChatMessage, cap(s.messages)),
-		Out:      make(chan string, cap(s.out)),
 	}
 
 	return
@@ -58,7 +77,16 @@ func (c *Chat) Start(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.sock.Start(ctx)
+
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		stopf := context.AfterFunc(ctx, func() {
+			c.sock.Stop()
+		})
+		defer stopf()
+
+		c.msgReader(ctx)
 	}()
 
 	c.router(ctx)
@@ -78,7 +106,7 @@ func (c *Chat) router(ctx context.Context) {
 
 		for m := range ch {
 			if msg.MessageID == m.MessageID {
-				c.sock.pool.Release(m)
+				c.pool.Release(m)
 				m = msg
 			}
 
@@ -96,6 +124,8 @@ func (c *Chat) router(ctx context.Context) {
 	// ID of previously processed msg.
 	prevID := uint32(0)
 
+	joinRE := regexp.MustCompile(`^/join \d+`)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,8 +134,6 @@ func (c *Chat) router(ctx context.Context) {
 			if msg == nil || !ok {
 				continue
 			}
-
-			c.sock.userData <- msg.Author
 
 			if c.logger.feed != nil {
 				c.logger.feed <- msg
@@ -131,7 +159,7 @@ func (c *Chat) router(ctx context.Context) {
 					hl++
 				default:
 					// Release oldest msg to pool before it's discarded.
-					c.sock.pool.Release(<-hist)
+					c.pool.Release(<-hist)
 				}
 
 				hist <- msg
@@ -140,20 +168,15 @@ func (c *Chat) router(ctx context.Context) {
 				prevID = msg.MessageID
 			}
 		case m, ok := <-c.Out:
-			if !ok {
-				continue
-			}
-
-			c.sock.out <- m
-		case u, ok := <-c.sock.userData:
 			switch {
-			case !ok:
+			case !ok, c.Cfg.ReadOnly && !joinRE.MatchString(m):
 				continue
-			case c.ClientUsername == "" && u.ID == uint32(c.Cfg.UserID):
-				c.ClientUsername = u.Username
+			default:
+				err := c.sock.write(m)
+				if err != nil {
+					c.ClientMsg(fmt.Sprintf("Failed to send: %s\nError: %s\n", m, err))
+				}
 			}
-
-			go c.Users.Add(u)
 		}
 	}
 }

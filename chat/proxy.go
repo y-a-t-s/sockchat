@@ -11,47 +11,42 @@ import (
 )
 
 type socksProxy struct {
-	proxy.Dialer
-	dialCtx proxyCtx
+	proxy.ContextDialer
 
-	url url.URL
+	url *url.URL
 	tor *tor.Tor
 }
 
-type proxyCtx func(ctx context.Context, network string, addr string) (net.Conn, error)
-
-func newSocksDialer(addr url.URL) (socksProxy, error) {
-	var p socksProxy
-
-	d, err := proxy.FromURL(&addr, &net.Dialer{})
+func newSocksDialer(addr *url.URL) (p *socksProxy, err error) {
+	d, err := proxy.FromURL(addr, &net.Dialer{})
 	if err != nil {
-		return p, err
+		return
 	}
 
-	p.Dialer = d
-	p.dialCtx = d.(proxy.ContextDialer).DialContext
-	p.url = addr
-	return p, nil
+	p = &socksProxy{
+		ContextDialer: d.(proxy.ContextDialer),
+		url:           addr,
+	}
+	return
 }
 
-func startTor(ctx context.Context) (socksProxy, error) {
-	var p socksProxy
-
+func startTor(ctx context.Context) (p *socksProxy, err error) {
 	log.Println("Connecting to Tor network...")
 	ti, err := tor.Start(ctx, nil)
 	if err != nil {
-		return p, err
+		return
 	}
 
 	td, err := ti.Dialer(ctx, nil)
 	if err != nil {
-		return p, err
+		return
 	}
 
-	p.Dialer = td.Dialer
-	p.dialCtx = td.DialContext
-	p.tor = ti
-	return p, nil
+	p = &socksProxy{
+		ContextDialer: td.Dialer.(proxy.ContextDialer),
+		tor:           ti,
+	}
+	return
 }
 
 func (p *socksProxy) stopTor() {
