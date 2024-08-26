@@ -33,10 +33,10 @@ github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5Cc
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af h1:6yITBqGTE2lEeTPG04SN9W+iWHCRyHqlVYILiSXziwk=
 github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af/go.mod h1:4F09kP5F+am0jAwlQLddpoMDM+iewkxxt6nxUQ5nq5o=
-github.com/y-a-t-s/firebird v0.0.0-20240702142028-fc2f2361cb95 h1:fEW4GHrwit5YdsY6GhNYjmHSHcS1fKvs1DwLvD4Vd4s=
-github.com/y-a-t-s/firebird v0.0.0-20240702142028-fc2f2361cb95/go.mod h1:8S1hx2sI8odLiO0KNDpGLzH5MePuTco7u8q29wlFzGQ=
-github.com/y-a-t-s/libkiwi v0.0.0-20240826135644-75e9ecd9dcbf h1:aLUZ6fb3Z72F7rAXRlEVhNgi8ZhZL8asuJ4VOKUsuxQ=
-github.com/y-a-t-s/libkiwi v0.0.0-20240826135644-75e9ecd9dcbf/go.mod h1:ajpMkO8VEh8CUnimeNhdGaSmeY9r0p0Wj/pCnOOpCS0=
+github.com/y-a-t-s/firebird v0.0.0-20240826182749-4000da15aa11 h1:K9RQObDfoXwiSSwxDYA8iRQeBCEQuxIJMtgXxzs4JdI=
+github.com/y-a-t-s/firebird v0.0.0-20240826182749-4000da15aa11/go.mod h1:iaOF6bre/MgFaBH513kb3RxcJ+x8vSPPAeOjN7RNkn8=
+github.com/y-a-t-s/libkiwi v0.0.0-20240826184257-bdba9d8e3dbf h1:A9U689pkiPfB5Wnp8U/HuiLmAyNWQYns8EzXLbWw19M=
+github.com/y-a-t-s/libkiwi v0.0.0-20240826184257-bdba9d8e3dbf/go.mod h1:6tce/coQMdknogrMJE90R8EgVdyxW2QZObadHCeuwRI=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a/go.mod h1:P+XmwS30IXTQdn5tA2iutPOUgjI07+tq3H3K9MVA1s8=
