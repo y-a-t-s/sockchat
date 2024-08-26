@@ -100,7 +100,7 @@ func configDir() (string, error) {
 // Generate new Config from template.
 func newConfig() Config {
 	return Config{
-		Host:     "kiwifarms.net",
+		Host:     "kiwifarms.st",
 		Port:     9443,
 		Logger:   false,
 		ReadOnly: false,
