@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"y-a-t-s/sockchat/config"
 
 	"github.com/gorilla/websocket"
+	"github.com/y-a-t-s/libkiwi"
 )
 
 // Max chat history length.
@@ -25,8 +27,7 @@ type sock struct {
 	*websocket.Conn
 
 	messages chan *ChatMessage
-
-	Out chan string
+	Out      chan string
 
 	cookies  []string
 	readOnly bool
@@ -76,10 +77,7 @@ func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 		return
 	}
 
-	cookies := cfg.Args
-	if !strings.Contains(cookies[0], "xf_session=") {
-		cookies[0] = "xf_session=; " + cookies[0]
-	}
+	cookies := []string{cfg.Cookies}
 
 	s = &sock{
 		Conn:     nil,
@@ -216,7 +214,8 @@ func (s *sock) write(msg string) error {
 	}
 
 	out := bytes.TrimSpace([]byte(msg))
-	if err := s.WriteMessage(websocket.TextMessage, out); err != nil {
+	err := s.WriteMessage(websocket.TextMessage, out)
+	if err != nil {
 		return err
 	}
 
@@ -224,6 +223,16 @@ func (s *sock) write(msg string) error {
 }
 
 func (c *Chat) msgReader(ctx context.Context) {
+	host, err := url.Parse("https://" + strings.Split(c.sock.url.Host, ":")[0])
+	if err != nil {
+		panic(err)
+	}
+
+	chatJson := make(chan []byte, 64)
+	defer close(chatJson)
+
+	go c.parseResponse(chatJson)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -250,20 +259,22 @@ func (c *Chat) msgReader(ctx context.Context) {
 			continue
 		}
 
-		err = c.parseResponse(msg)
-		if err != nil {
-			errMsg := err.Error()
-			c.ClientMsg(errMsg)
-
-			if strings.Contains(errMsg, "cannot join") {
-				tk, err := c.kf.RefreshSession()
-				if err != nil {
-					continue
-				}
-				c.sock.cookies[0] = regexp.MustCompile(`xf_session=.*`).
-					ReplaceAllString(c.sock.cookies[0], tk)
-				c.sock.disconnect()
+		// Server sometimes sends plaintext messages to client.
+		// This typically happens when it sends error messages.
+		switch {
+		case json.Valid(msg):
+			chatJson <- msg
+		case strings.Contains(string(msg), "cannot join"):
+			c.ClientMsg("Session expired. Refreshing token...")
+			_, err := c.kf.RefreshSession()
+			if err != nil {
+				continue
 			}
+			c.sock.cookies[0] = c.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
+			c.sock.disconnect()
+		default:
+			c.ClientMsg(string(msg))
 		}
+
 	}
 }

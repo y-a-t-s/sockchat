@@ -33,19 +33,10 @@ import (
 	"syscall"
 
 	"y-a-t-s/sockchat/chat"
-	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/services"
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		log.Panic(err)
-	}
-	if err := cfg.ParseArgs(); err != nil {
-		log.Panic(err)
-	}
-
 	// Catch terminating signals to try shutting down gracefully.
 	// Needed to ensure log buffer gets flushed.
 	sigs := []os.Signal{
@@ -63,7 +54,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
 	defer cancel()
 
-	c, err := chat.NewChat(ctx, cfg)
+	c, err := chat.NewChat(ctx)
 	if err != nil {
 		log.Panic(err)
 	}

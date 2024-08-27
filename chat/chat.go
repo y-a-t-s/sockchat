@@ -28,7 +28,16 @@ type Chat struct {
 	Messages chan *ChatMessage
 }
 
-func NewChat(ctx context.Context, cfg config.Config) (c *Chat, err error) {
+func NewChat(ctx context.Context) (c *Chat, err error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return
+	}
+	err = cfg.ParseArgs()
+	if err != nil {
+		return
+	}
+
 	s, err := newSocket(ctx, cfg)
 	if err != nil {
 		return
@@ -41,7 +50,7 @@ func NewChat(ctx context.Context, cfg config.Config) (c *Chat, err error) {
 		hc.Transport = tr
 	}
 
-	kf, err := libkiwi.NewKF(hc, cfg.Host, cfg.Args[0])
+	kf, err := libkiwi.NewKF(hc, cfg.Host, cfg.Cookies)
 	if err != nil {
 		return
 	}
@@ -64,6 +73,15 @@ func (c *Chat) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	stopf := context.AfterFunc(ctx, func() {
+		if cfg, err := config.LoadConfig(); err == nil {
+			cfg.Cookies = c.sock.cookies[0]
+			cfg.Save()
+		}
+		c.sock.Stop()
+	})
+	defer stopf()
+
 	var wg sync.WaitGroup
 
 	if c.Cfg.Logger {
@@ -77,15 +95,6 @@ func (c *Chat) Start(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		stopf := context.AfterFunc(ctx, func() {
-			c.sock.Stop()
-		})
-		defer stopf()
-
 		c.msgReader(ctx)
 	}()
 

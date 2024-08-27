@@ -8,15 +8,50 @@ import (
 	"html"
 )
 
-type serverResp struct {
+type chatData struct {
 	// Using json.RawMessage to delay parsing these parts.
 	Messages json.RawMessage `json:"messages"`
 	Users    json.RawMessage `json:"users"`
 }
 
-func (c *Chat) parseResponse(msg []byte) error {
-	if msg == nil || len(msg) == 0 {
-		return errors.New("Received empty message from server.")
+func (c *Chat) parseResponse(in chan []byte) {
+	parseUser := func(jd *json.Decoder) error {
+		u := c.pool.NewUser()
+		if err := jd.Decode(&u); err != nil {
+			return err
+		}
+
+		go func() {
+			if !c.Users.Add(u) {
+				c.pool.Release(u)
+				return
+			}
+
+			if c.ClientUsername == "" && u.ID == uint32(c.Cfg.UserID) {
+				c.ClientUsername = u.Username
+			}
+		}()
+
+		return nil
+	}
+
+	parseMsg := func(jd *json.Decoder) (msg *ChatMessage, err error) {
+		msg = c.pool.NewMsg()
+
+		err = jd.Decode(msg)
+		if err != nil {
+			return
+		}
+		msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
+
+		if qu := c.Users.QueryUser(msg.Author.ID); qu != nil {
+			c.pool.Release(msg.Author)
+			msg.Author = qu
+		} else {
+			go c.Users.Add(msg.Author)
+		}
+
+		return
 	}
 
 	parseJson := func(b []byte, out interface{}) error {
@@ -33,61 +68,40 @@ func (c *Chat) parseResponse(msg []byte) error {
 		for jd.More() {
 			switch out.(type) {
 			case *ChatMessage:
-				msg := c.pool.NewMsg()
-
-				if err := jd.Decode(msg); err != nil {
+				msg, err := parseMsg(jd)
+				if err != nil {
 					errs = append(errs, err)
 					continue
-				}
-				msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
-
-				if qu := c.Users.QueryUser(msg.Author.ID); qu != nil {
-					c.pool.Release(msg.Author)
-					msg.Author = qu
-				} else {
-					go c.Users.Add(msg.Author)
 				}
 
 				c.sock.messages <- msg
 			case *User:
-				u := c.pool.NewUser()
-				if err := jd.Decode(&u); err != nil {
+				err := parseUser(jd)
+				if err != nil {
 					errs = append(errs, err)
-					continue
 				}
-
-				go func() {
-					if !c.Users.Add(u) {
-						c.pool.Release(u)
-					}
-				}()
 			}
 		}
 
 		return errors.Join(errs...)
 	}
 
-	// Server sometimes sends plaintext messages to client.
-	// This typically happens when it sends error messages.
-	if !json.Valid(msg) {
-		return errors.New(string(msg))
-	}
+	for m := range in {
+		var sm chatData
+		if err := json.Unmarshal(m, &sm); err != nil {
+			c.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", m))
+			continue
+		}
 
-	var sm serverResp
-	if err := json.Unmarshal(msg, &sm); err != nil {
-		return errors.New(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", msg))
-	}
+		if len(sm.Users) > 0 {
+			var u *User
+			// Can do async, since order doesn't matter as much here.
+			go parseJson(sm.Users, u)
+		}
 
-	if len(sm.Users) > 0 {
-		var u *User
-		// Can do async, since order doesn't matter as much here.
-		go parseJson(sm.Users, u)
+		if len(sm.Messages) > 0 {
+			var m *ChatMessage
+			parseJson(sm.Messages, m)
+		}
 	}
-
-	if len(sm.Messages) > 0 {
-		var m *ChatMessage
-		parseJson(sm.Messages, m)
-	}
-
-	return nil
 }

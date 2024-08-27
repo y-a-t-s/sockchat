@@ -12,6 +12,7 @@ import (
 // Using JSON because it's hard to fuck up the formatting unless you're braindead.
 // I like YAML, but it requires more caution than I can expect from most users.
 type Config struct {
+	Cookies  string `json:"cookies"`
 	Host     string `json:"host"`
 	Port     uint   `json:"port"`
 	Logger   bool   `json:"logger"`
@@ -35,48 +36,43 @@ type proxyConfig struct {
 	Pass    string `json:"password"`
 }
 
+func openConfig() (*os.File, error) {
+	cfgDir, err := configDir()
+	if err != nil {
+		return nil, err
+	}
+	cfgPath := filepath.Join(cfgDir, "config.json")
+
+	return os.OpenFile(cfgPath, os.O_CREATE|os.O_RDWR, 0644)
+}
+
 // Load user config from config.json file in the UserConfigDir provided by the os package.
 // Creates the file and fills it with defaults from newConfig if it isn't found.
 // Adds missing option keys, if any, with defaults to file.
-func LoadConfig() (Config, error) {
+func LoadConfig() (cfg Config, err error) {
 	// Generate Config from template.
 	// JSON decode will set any existing values.
-	// New keys get written with defaults.
-	cfg := newConfig()
+	// New keys get set to defaults and saved.
+	cfg = newConfig()
 
-	cfgDir, err := configDir()
+	f, err := openConfig()
 	if err != nil {
-		return cfg, err
-	}
-
-	// Open config.json file for RW.
-	cfgPath := filepath.Join(cfgDir, "config.json")
-	f, err := os.OpenFile(cfgPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return cfg, err
+		return
 	}
 	defer f.Close()
 
 	// Decode JSON from file descriptor.
 	jd := json.NewDecoder(f)
 	for jd.More() {
-		if err := jd.Decode(&cfg); err != nil {
-			return cfg, err
+		if err = jd.Decode(&cfg); err != nil {
+			return
 		}
 	}
 
 	// Truncate and write loaded config with any potential new keys.
-	if err := f.Truncate(0); err != nil {
-		return cfg, err
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return cfg, err
-	}
-	if err := writeConfig(f, cfg); err != nil {
-		return cfg, err
-	}
+	cfg.writeConfig(f)
 
-	return cfg, nil
+	return
 }
 
 // Get path string of user config dir.
@@ -90,7 +86,7 @@ func configDir() (string, error) {
 	// Create config dir if necessary. Doesn't break anything existing.
 	// If the dir already exists, it will return an fs.ErrExist error.
 	// In that case, we just want to continue without returning early.
-	if err := os.Mkdir(cfgDir, 0755); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err = os.Mkdir(cfgDir, 0755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return "", err
 	}
 
@@ -100,6 +96,7 @@ func configDir() (string, error) {
 // Generate new Config from template.
 func newConfig() Config {
 	return Config{
+		Cookies:  "",
 		Host:     "kiwifarms.st",
 		Port:     9443,
 		Logger:   false,
@@ -118,15 +115,36 @@ func newConfig() Config {
 }
 
 // Write loaded config to config.json file.
-func writeConfig(f *os.File, cfg Config) error {
+func (cfg *Config) Save() error {
+	return cfg.writeConfig(nil)
+}
+
+// f may be provided to reduce the number of file opens but is not required.
+func (cfg *Config) writeConfig(f *os.File) error {
+	if f == nil {
+		f, err := openConfig()
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+	}
+
 	b, err := json.MarshalIndent(cfg, "", "\t")
 	if err != nil {
+		return err
+	}
+
+	if err = f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err = f.Seek(0, 0); err != nil {
 		return err
 	}
 
 	if _, err := f.Write(b); err != nil {
 		return err
 	}
+
 	// Write trailing newline to file.
 	if _, err := f.WriteString("\n"); err != nil {
 		return err
