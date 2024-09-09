@@ -63,12 +63,14 @@ func main() {
 	// Ensures all routines terminate before the program exits.
 	var wg sync.WaitGroup
 
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer cancel()
 		c.Start(ctx)
 	}()
+
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer cancel()

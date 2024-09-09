@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"strings"
+	"y-a-t-s/sockchat/config"
 
 	"github.com/cretz/bine/tor"
 	"golang.org/x/net/proxy"
@@ -17,15 +19,43 @@ type socksProxy struct {
 	tor *tor.Tor
 }
 
-func newSocksDialer(addr *url.URL) (p *socksProxy, err error) {
-	d, err := proxy.FromURL(addr, &net.Dialer{})
+// user and pass may be left empty if credentials are supplied in addr.
+func parseProxyAddr(addr string, user string, pass string) (*url.URL, error) {
+	// Fallback to socks5 if no protocol is given.
+	if !strings.Contains(addr, "://") {
+		addr = "socks5://" + addr
+	}
+
+	u, err := url.Parse(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// url.Parse collects any credentials in the URL to a *url.Userinfo.
+	// If none are found, the pointer is nil.
+	// Credentials in the URL take precedence over explicit ones in the config.
+	if u.User == nil && user != "" {
+		// Create new &url.Userinfo with the explicit credentials.
+		u.User = url.UserPassword(user, pass)
+	}
+
+	return u, nil
+}
+
+func newSocksDialer(cfg config.Config) (p *socksProxy, err error) {
+	u, err := parseProxyAddr(cfg.Proxy.Addr, cfg.Proxy.User, cfg.Proxy.Pass)
+	if err != nil {
+		return
+	}
+
+	d, err := proxy.FromURL(u, &net.Dialer{})
 	if err != nil {
 		return
 	}
 
 	p = &socksProxy{
 		ContextDialer: d.(proxy.ContextDialer),
-		url:           addr,
+		url:           u,
 	}
 	return
 }

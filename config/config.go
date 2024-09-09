@@ -18,15 +18,29 @@ type Config struct {
 	Logger   bool   `json:"logger"`
 	ReadOnly bool   `json:"read_only"`
 	Room     uint   `json:"room"`
-	Tor      bool   `json:"tor"`
 	UserID   int    `json:"user_id"`
 
 	Proxy proxyConfig `json:"proxy"`
+	Tor   torConfig   `json:"tor"`
 
 	// ApiMode bool `json:",omitempty"`
 
 	// Used for collecting remaining args, containing cookies.
 	Args []string `json:",omitempty"`
+}
+
+type torConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Onion    string `json:"onion_host"`
+	Clearnet bool   `json:"clearnet_over_tor"`
+}
+
+func newTorConfig() torConfig {
+	return torConfig{
+		Enabled:  false,
+		Onion:    "kiwifarmsaaf4t2h7gc3dfc5ojhmqruw2nit3uejrpiagrxeuxiyxcyd.onion",
+		Clearnet: false,
+	}
 }
 
 type proxyConfig struct {
@@ -102,7 +116,6 @@ func newConfig() Config {
 		Logger:   false,
 		ReadOnly: false,
 		Room:     1,
-		Tor:      false,
 		UserID:   -1,
 
 		Proxy: proxyConfig{
@@ -111,7 +124,78 @@ func newConfig() Config {
 			User:    "",
 			Pass:    "",
 		},
+		Tor: newTorConfig(),
 	}
+}
+
+func (cfg *Config) UnmarshalJSON(b []byte) error {
+	var cm map[string]interface{}
+
+	parseProxyCfg := func(m map[string]interface{}) {
+		for k, v := range m {
+			switch k {
+			case "enabled":
+				cfg.Proxy.Enabled = v.(bool)
+			case "address":
+				cfg.Proxy.Addr = v.(string)
+			case "username":
+				cfg.Proxy.User = v.(string)
+			case "password":
+				cfg.Proxy.Pass = v.(string)
+			}
+		}
+	}
+
+	parseTorCfg := func(m map[string]interface{}) {
+		for k, v := range m {
+			switch k {
+			case "enabled":
+				cfg.Tor.Enabled = v.(bool)
+			case "onion_host":
+				cfg.Tor.Onion = v.(string)
+			case "clearnet_over_tor":
+				cfg.Tor.Clearnet = v.(bool)
+			}
+		}
+	}
+
+	err := json.Unmarshal(b, &cm)
+	if err != nil {
+		return err
+	}
+
+	for k, v := range cm {
+		switch k {
+		case "cookies":
+			cfg.Cookies = v.(string)
+		case "host":
+			cfg.Host = v.(string)
+		case "port":
+			cfg.Port = uint(v.(float64))
+		case "logger":
+			cfg.Logger = v.(bool)
+		case "read_only":
+			cfg.ReadOnly = v.(bool)
+		case "room":
+			cfg.Room = uint(v.(float64))
+		case "user_id":
+			cfg.UserID = int(v.(float64))
+		case "proxy":
+			parseProxyCfg(v.(map[string]interface{}))
+		case "tor":
+			switch v.(type) {
+			// Migrate deprecated config value.
+			// Will eventually be removed in future versions.
+			case bool:
+				cfg.Tor = newTorConfig()
+				cfg.Tor.Enabled = v.(bool)
+			case map[string]interface{}:
+				parseTorCfg(v.(map[string]interface{}))
+			}
+		}
+	}
+
+	return nil
 }
 
 // Write loaded config to config.json file.
@@ -120,9 +204,9 @@ func (cfg *Config) Save() error {
 }
 
 // f may be provided to reduce the number of file opens but is not required.
-func (cfg *Config) writeConfig(f *os.File) error {
+func (cfg *Config) writeConfig(f *os.File) (err error) {
 	if f == nil {
-		f, err := openConfig()
+		f, err = openConfig()
 		if err != nil {
 			return err
 		}

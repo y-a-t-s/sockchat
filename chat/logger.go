@@ -6,77 +6,150 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
-type logger struct {
-	*bufio.Writer
-	feed chan *ChatMessage
+type logfile struct {
+	file   *os.File
+	writer *bufio.Writer
 }
 
-func (l *logger) Start(ctx context.Context) error {
-	cfgDir, err := os.UserConfigDir()
+func openLog(name string) (lf logfile, err error) {
+	f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return
 	}
-	logDir := filepath.Join(cfgDir, "sockchat/logs")
+	bw := bufio.NewWriter(f)
 
-	t := time.Now()
-	outDir := filepath.Join(logDir, t.Format("2006-01-02"))
+	lf = logfile{
+		file:   f,
+		writer: bw,
+	}
+	return
+}
 
-	err = os.Mkdir(logDir, 0755)
+func (lf *logfile) Close() {
+	if lf.writer != nil {
+		lf.writer.Flush()
+		lf.writer = nil
+	}
+
+	if lf.file != nil {
+		lf.file.Close()
+		lf.file = nil
+	}
+}
+
+type logger struct {
+	chatLog logfile
+	errLog  logfile
+
+	feed chan *Message
+	errs *slog.Logger
+
+	logDir string
+}
+
+const dateFmt = "2006-01-02 15_04_05 MST"
+
+func newLogDir(baseDir string) (string, error) {
+	outDir := filepath.Join(baseDir, time.Now().Format("2006-01-02"))
+
+	err := os.Mkdir(baseDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
+		return "", err
 	}
 	err = os.Mkdir(outDir, 0755)
 	if err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
+		return "", err
 	}
 
-	dateFmt := "2006-01-02 15:04:05 MST"
-	// See time.Format docs to make sense of the date string.
-	if runtime.GOOS == "windows" {
-		dateFmt = "2006-01-02 15_04_05 MST"
-	}
-	logPath := filepath.Join(outDir, fmt.Sprintf("%s.log", t.Format(dateFmt)))
-	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	return outDir, nil
+}
+
+func newLogger(chat bool) (l logger, err error) {
+	cfgDir, err := os.UserConfigDir()
 	if err != nil {
-		return err
+		return
+	}
+	baseDir := filepath.Join(cfgDir, "sockchat/logs")
+
+	logDir, err := newLogDir(baseDir)
+	if err != nil {
+		return
+	}
+	l.logDir = logDir
+
+	if chat {
+		l.chatLog, err = l.newChatLog()
+		if err != nil {
+			return
+		}
 	}
 
-	l.Writer = bufio.NewWriter(logFile)
-	l.feed = make(chan *ChatMessage, 1024)
+	elFile, err := l.newErrLog()
+	if err != nil {
+		return
+	}
+	elw := bufio.NewWriter(elFile.file)
+	l.errs = slog.New(slog.NewTextHandler(elw, nil))
 
+	l.feed = l.newMsgFeed()
+
+	return
+}
+
+func (l *logger) newChatLog() (lf logfile, err error) {
+	// See time.Format docs to make sense of the date string.
+	// Note: Windows doesn't allow ':' in file names. Use '_' instead.
+
+	if l.feed == nil {
+		l.feed = l.newMsgFeed()
+	}
+
+	return openLog(filepath.Join(l.logDir, fmt.Sprintf("%s.log", time.Now().Format(dateFmt))))
+}
+
+func (l *logger) newErrLog() (lf logfile, err error) {
+	return openLog(filepath.Join(l.logDir, fmt.Sprintf("%s error.log", time.Now().Format(dateFmt))))
+}
+
+func (l *logger) newMsgFeed() chan *Message {
+	feed := make(chan *Message, 1024)
+	l.feed = feed
+	return feed
+}
+
+func (l *logger) Start(ctx context.Context) {
 	defer func() {
-		l.Flush()
-		logFile.Close()
-		l.feed = nil
+		l.Stop()
 	}()
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	const logFmt = "[%s] [%s (#%d)]%s: %s\n"
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-l.feed:
+			if l.chatLog.writer == nil {
+				continue
+			}
 
-	context.AfterFunc(ctx, func() {
-		close(l.feed)
-	})
+			fl := ""
+			if msg.IsEdited() {
+				fl += "*"
+			}
 
-	logFmt := "[%s] [%s (#%d)]%s: %s\n"
-	for msg := range l.feed {
-		if l.Writer == nil {
-			return errors.New("Log writer is closed.")
+			fmt.Fprintf(l.chatLog.writer, logFmt, time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
+				msg.Author.Username, msg.Author.ID, fl, msg.MessageRaw)
 		}
-
-		fl := ""
-		if msg.IsEdited() {
-			fl += "*"
-		}
-
-		fmt.Fprintf(l, logFmt, time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
-			msg.Author.Username, msg.Author.ID, fl, msg.MessageRaw)
 	}
+}
 
-	return nil
+func (l *logger) Stop() {
+	l.chatLog.Close()
+	l.errLog.Close()
 }

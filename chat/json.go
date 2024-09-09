@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,28 +15,18 @@ type chatData struct {
 	Users    json.RawMessage `json:"users"`
 }
 
-func (c *Chat) parseResponse(in chan []byte) {
+func (c *Chat) parseResponse(ctx context.Context) {
 	parseUser := func(jd *json.Decoder) error {
 		u := c.pool.NewUser()
 		if err := jd.Decode(&u); err != nil {
 			return err
 		}
 
-		go func() {
-			if !c.Users.Add(u) {
-				c.pool.Release(u)
-				return
-			}
-
-			if c.ClientUsername == "" && u.ID == uint32(c.Cfg.UserID) {
-				c.ClientUsername = u.Username
-			}
-		}()
-
+		c.sock.userData <- u
 		return nil
 	}
 
-	parseMsg := func(jd *json.Decoder) (msg *ChatMessage, err error) {
+	parseMsg := func(jd *json.Decoder) (msg *Message, err error) {
 		msg = c.pool.NewMsg()
 
 		err = jd.Decode(msg)
@@ -44,11 +35,11 @@ func (c *Chat) parseResponse(in chan []byte) {
 		}
 		msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 
-		if qu := c.Users.QueryUser(msg.Author.ID); qu != nil {
-			c.pool.Release(msg.Author)
+		if qu := c.Users.Query(msg.Author.ID); qu != nil {
+			c.Users.ReleaseUser(msg.Author)
 			msg.Author = qu
 		} else {
-			go c.Users.Add(msg.Author)
+			c.sock.userData <- msg.Author
 		}
 
 		return
@@ -58,7 +49,7 @@ func (c *Chat) parseResponse(in chan []byte) {
 		jd := json.NewDecoder(bytes.NewReader(b))
 
 		switch out.(type) {
-		case *ChatMessage:
+		case *Message:
 			if _, err := jd.Token(); err != nil {
 				return err
 			}
@@ -67,7 +58,7 @@ func (c *Chat) parseResponse(in chan []byte) {
 		var errs []error
 		for jd.More() {
 			switch out.(type) {
-			case *ChatMessage:
+			case *Message:
 				msg, err := parseMsg(jd)
 				if err != nil {
 					errs = append(errs, err)
@@ -86,22 +77,27 @@ func (c *Chat) parseResponse(in chan []byte) {
 		return errors.Join(errs...)
 	}
 
-	for m := range in {
-		var sm chatData
-		if err := json.Unmarshal(m, &sm); err != nil {
-			c.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", m))
-			continue
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-c.sock.chatJson:
+			var sm chatData
+			if err := json.Unmarshal(m, &sm); err != nil {
+				c.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", m), false)
+				continue
+			}
 
-		if len(sm.Users) > 0 {
-			var u *User
-			// Can do async, since order doesn't matter as much here.
-			go parseJson(sm.Users, u)
-		}
+			if len(sm.Users) > 0 {
+				var u *User
+				// Can do async, since order doesn't matter as much here.
+				go parseJson(sm.Users, u)
+			}
 
-		if len(sm.Messages) > 0 {
-			var m *ChatMessage
-			parseJson(sm.Messages, m)
+			if len(sm.Messages) > 0 {
+				var m *Message
+				parseJson(sm.Messages, m)
+			}
 		}
 	}
 }

@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"y-a-t-s/sockchat/config"
@@ -25,8 +29,17 @@ const USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox
 
 type sock struct {
 	*websocket.Conn
+	mutex *sync.RWMutex
 
-	messages chan *ChatMessage
+	kf *libkiwi.KF
+
+	errLog  chan error
+	infoLog chan string
+	debug   chan string
+
+	chatJson chan []byte
+	messages chan *Message
+	userData chan *User
 	Out      chan string
 
 	cookies  []string
@@ -37,51 +50,34 @@ type sock struct {
 }
 
 // Split the protocol part from addresses in the config, if present.
-func splitProtocol(addr string) (string, string, error) {
-	// FindStringSubmatch is used to capture the groups.
-	// Index 0 is the full matching string with all groups.
-	// The rest are numbered by the order of the opening parens.
-	// Here, we want the last 2 groups (indexes 1 and 2, requiring length 3).
-	tmp := regexp.MustCompile(`([\w-]+://)?([^/]+)`).FindStringSubmatch(addr)
-	// At the very least, we need the hostname part (index 2).
-	if len(tmp) < 3 || tmp[2] == "" {
-		return "", "", errors.New(fmt.Sprintf("Failed to parse address: %s", addr))
+func parseHost(addr string) (*url.URL, error) {
+	if !strings.Contains(addr, "://") {
+		addr = "https://" + addr
 	}
 
-	return tmp[1], tmp[2], nil
+	u, err := url.Parse(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &url.URL{
+		Scheme: u.Scheme,
+		Host:   u.Hostname(),
+	}, nil
 }
 
 func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
-	parseProxyAddr := func() (u *url.URL, err error) {
-		proto, addr, err := splitProtocol(cfg.Proxy.Addr)
-		if err != nil {
-			return
-		}
-		// Fallback to socks5 if no protocol is given.
-		if proto == "" {
-			proto = "socks5"
-		}
-		u, err = url.Parse(fmt.Sprintf("%s://%s", proto, addr))
-		if err != nil {
-			return
-		}
-
-		// url.Parse collects any credentials in the URL to a *url.Userinfo.
-		// If none are found, the pointer is nil.
-		// Credentials in the URL take precedence over explicit ones in the config.
-		if u.User == nil && cfg.Proxy.User != "" {
-			// Create new &url.Userinfo with the explicit credentials.
-			u.User = url.UserPassword(cfg.Proxy.User, cfg.Proxy.Pass)
-		}
-
-		return
-	}
-
 	cookies := []string{cfg.Cookies}
 
 	s = &sock{
 		Conn:     nil,
-		messages: make(chan *ChatMessage, 1024),
+		mutex:    &sync.RWMutex{},
+		errLog:   make(chan error, 8),
+		infoLog:  make(chan string, 64),
+		debug:    make(chan string, 16),
+		chatJson: make(chan []byte, 64),
+		messages: make(chan *Message, 1024),
+		userData: make(chan *User, 256),
 		Out:      make(chan string, 16),
 		cookies:  cookies,
 		readOnly: cfg.ReadOnly,
@@ -92,36 +88,60 @@ func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 	if err != nil {
 		return
 	}
-
-	switch {
-	case cfg.Tor, strings.HasSuffix(s.url.Hostname(), ".onion"):
-		p, err := startTor(ctx)
-		if err != nil {
-			return nil, err
-		}
-		s.proxy = p
-	case cfg.Proxy.Enabled:
-		addr, err := parseProxyAddr()
-		if err != nil {
-			return nil, err
-		}
-		p, err := newSocksDialer(addr)
-		if err != nil {
-			return nil, err
-		}
-		s.proxy = p
+	if strings.HasSuffix(s.url.Hostname(), ".onion") {
+		cfg.Tor.Enabled = true
+		cfg.Tor.Clearnet = false
 	}
+
+	var p *socksProxy
+	switch {
+	case cfg.Tor.Enabled:
+		// Set socket URL to onion domain if desired.
+		if cfg.Tor.Clearnet == false {
+			err = s.setUrl(cfg.Tor.Onion, uint16(cfg.Port))
+			if err != nil {
+				return
+			}
+
+			log.Printf("Connecting to onion service: %s\nMake sure this domain is correct.\n", s.url.Hostname())
+			time.Sleep(3 * time.Second)
+		}
+
+		p, err = startTor(ctx)
+		if err != nil {
+			return
+		}
+	case cfg.Proxy.Enabled:
+		p, err = newSocksDialer(cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.proxy = p
+
+	hc := http.Client{}
+	if s.proxy != nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = s.proxy.DialContext
+		hc.Transport = tr
+	}
+
+	kf, err := libkiwi.NewKF(hc, s.url.Hostname(), cfg.Cookies)
+	if err != nil {
+		return
+	}
+	s.kf = kf
 
 	return
 }
 
 func (s *sock) setUrl(addr string, port uint16) error {
-	_, host, err := splitProtocol(addr)
+	host, err := parseHost(addr)
 	if err != nil {
 		return err
 	}
 
-	u, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host, port))
+	u, err := url.Parse(fmt.Sprintf("wss://%s:%d/chat.ws", host.Hostname(), port))
 	if err != nil {
 		return err
 	}
@@ -130,26 +150,12 @@ func (s *sock) setUrl(addr string, port uint16) error {
 	return nil
 }
 
-func (s *sock) Stop() {
-	if s.Conn != nil {
-		s.Close()
-		s.Conn = nil
-	}
-	if s.proxy != nil {
-		s.proxy.stopTor()
-	}
-	close(s.Out)
-}
-
-func (s *sock) connect(ctx context.Context) error {
+func (s *sock) connect(ctx context.Context) (err error) {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
-
-	// Close if necessary before connecting.
-	s.disconnect()
 
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
@@ -162,77 +168,160 @@ func (s *sock) connect(ctx context.Context) error {
 		wd.NetDialContext = s.proxy.DialContext
 	}
 
-	// UA defined up here to make the redundant slice warning fuck off.
-	ua := []string{USER_AGENT}
-	conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
-		"Cookie":     s.cookies,
-		"User-Agent": ua,
-	})
+	s.disconnect()
+
+	// Try connecting for a minute, at most.
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	go func() {
+		defer cancel()
+
+		s.mutex.Lock()
+
+		s.infoLog <- "Opening socket..."
+
+		// UA defined up here to make the redundant slice warning fuck off.
+		ua := []string{USER_AGENT}
+		conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
+			"Cookie":     s.cookies,
+			"User-Agent": ua,
+		})
+		if err != nil {
+			return
+		}
+
+		conn.EnableWriteCompression(true)
+
+		// Set s.conn at the end to avoid early access.
+		s.Conn = conn
+
+		s.mutex.Unlock()
+	}()
+
+	<-ctx.Done()
 	if err != nil {
-		return err
+		return
 	}
 
-	conn.EnableWriteCompression(true)
 	// Send /join message for desired room.
 	s.Out <- fmt.Sprintf("/join %d", s.room)
 
-	// Set s.conn at the end to avoid early access.
-	s.Conn = conn
+	s.infoLog <- "Connected."
+
 	return nil
 }
 
 func (s *sock) disconnect() {
-	if s.Conn != nil {
-		s.Conn.Close()
-		s.Conn = nil
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		defer cancel()
+
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
+
+		if s.Conn != nil {
+			s.Conn.Close()
+			s.Conn = nil
+		}
+	}()
+
+	<-ctx.Done()
 }
 
 // Tries reconnecting 8 times.
 func (s *sock) reconnect(ctx context.Context) error {
-	for i := 0; i < 8; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	for {
+		for i := 0; i < 8; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			err := s.connect(ctx)
+			if err == nil {
+				return nil
+			}
 		}
 
-		err := s.connect(ctx)
-		if err == nil {
-			return nil
+		s.infoLog <- "Failed to connect 8 times. Waiting 15 seconds."
+		time.Sleep(time.Second * 15)
+	}
+}
+
+func (s *sock) write(ctx context.Context, msg string) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	go func() {
+		defer cancel()
+
+		// May seem counterintuitive, but we're "reading" the Conn pointer.
+		s.mutex.RLock()
+		defer s.mutex.RUnlock()
+
+		if s.Conn == nil {
+			err = &errSocketClosed{}
+			return
 		}
-	}
 
-	return errors.New("Reconnect failed.")
+		out := bytes.TrimSpace([]byte(msg))
+		if len(out) == 0 {
+			err = errors.New("Outgoing msg is empty.")
+			return
+		}
+
+		err = s.WriteMessage(websocket.TextMessage, out)
+	}()
+
+	<-ctx.Done()
+
+	return
 }
 
-// WebSocket msg writing wrapper. Not thread safe by itself.
-// Accepts []byte or string.
-func (s *sock) write(msg string) error {
-	if s.Conn == nil {
-		return errors.New("Socket is closed.")
-	}
-
-	out := bytes.TrimSpace([]byte(msg))
-	err := s.WriteMessage(websocket.TextMessage, out)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *Chat) msgReader(ctx context.Context) {
-	host, err := url.Parse("https://" + strings.Split(c.sock.url.Host, ":")[0])
+func (s *sock) msgReader(ctx context.Context) {
+	host, err := url.Parse("https://" + s.url.Hostname())
 	if err != nil {
 		panic(err)
 	}
 
-	chatJson := make(chan []byte, 64)
-	defer close(chatJson)
+	readMsg := func() (msg []byte, err error) {
+		s.mutex.RLock()
+		defer s.mutex.RUnlock()
 
-	go c.parseResponse(chatJson)
+		if s.Conn == nil {
+			return nil, &errSocketClosed{}
+		}
 
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		go func() {
+			defer cancel()
+
+			_, msg, err = s.ReadMessage()
+			if err != nil {
+				s.infoLog <- "Failed to read from socket.\n"
+			}
+		}()
+
+		<-ctx.Done()
+
+		switch {
+		case err != nil:
+			return
+		case len(msg) == 0:
+			err = &errReadTimedOut{s.room}
+			return
+		}
+
+		return
+	}
+
+	var ert *errReadTimedOut
 	for {
 		select {
 		case <-ctx.Done():
@@ -240,41 +329,104 @@ func (c *Chat) msgReader(ctx context.Context) {
 		default:
 		}
 
-		if c.sock.Conn == nil {
-			c.ClientMsg("Opening socket...")
-			err := c.sock.reconnect(ctx)
-			if err != nil {
-				c.ClientMsg("Failed to connect 8 times. Waiting 15 seconds.")
-				time.Sleep(time.Second * 15)
-				continue
-			}
-			c.ClientMsg("Connected.\n")
-			continue
-		}
-
-		_, msg, err := c.sock.ReadMessage()
+		msg, err := readMsg()
 		if err != nil {
-			c.ClientMsg("Failed to read from socket.\n")
-			c.sock.Conn = nil
+			if !errors.As(err, &ert) {
+				s.disconnect()
+				s.connect(ctx)
+			}
 			continue
 		}
 
 		// Server sometimes sends plaintext messages to client.
 		// This typically happens when it sends error messages.
-		switch {
+		switch ms := string(msg); {
 		case json.Valid(msg):
-			chatJson <- msg
-		case strings.Contains(string(msg), "cannot join"):
-			c.ClientMsg("Session expired. Refreshing token...")
-			_, err := c.kf.RefreshSession()
+			s.chatJson <- msg
+		case strings.Contains(ms, "cannot join"):
+			s.infoLog <- "Session expired. Refreshing token..."
+			_, err := s.kf.RefreshSession(ctx)
 			if err != nil {
 				continue
 			}
-			c.sock.cookies[0] = c.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
-			c.sock.disconnect()
+			s.cookies[0] = s.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
+			s.disconnect()
 		default:
-			c.ClientMsg(string(msg))
+			s.infoLog <- ms
 		}
 
+	}
+}
+
+func (s *sock) router(ctx context.Context) {
+	// Join msg regex.
+	joinRE := regexp.MustCompile(`^/join \d+`)
+
+	cmdHandler := func(cs string) {
+		switch cmd := strings.SplitN(cs, " ", 3); cmd[0] {
+		case "!debug":
+			// Various debugging tools.
+			switch cmd[1] {
+			case "msg":
+				s.debug <- cmd[2]
+			}
+		case "!q", "!quit":
+			return
+		case "!reconnect":
+			go s.disconnect()
+		}
+	}
+
+	retry := make(chan string, 4)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go s.msgReader(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-retry:
+			go s.write(ctx, m)
+		case m := <-s.Out:
+			isJoin := joinRE.MatchString(m)
+			switch {
+			case s.readOnly && !isJoin:
+				continue
+			case m[0] == '!':
+				cmdHandler(m)
+			default:
+				if isJoin {
+					room, err := strconv.Atoi(strings.Split(m, " ")[1])
+					if err != nil {
+						s.errLog <- err
+					}
+					s.room = uint(room)
+				}
+
+				go func() {
+					err := s.write(ctx, m)
+					if err != nil {
+						s.infoLog <- fmt.Sprintf("Failed to send: %s\nError: %s\n", m, err)
+						retry <- m
+					}
+				}()
+			}
+		}
+	}
+}
+
+func (s *sock) Start(ctx context.Context) {
+	s.connect(ctx)
+	s.router(ctx)
+}
+
+func (s *sock) Stop() {
+	s.disconnect()
+
+	if s.proxy != nil {
+		s.proxy.stopTor()
 	}
 }

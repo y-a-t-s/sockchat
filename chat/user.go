@@ -49,38 +49,51 @@ func (u *User) String(fl string) string {
 }
 
 type userTable struct {
-	users map[uint32]*User
-	mutex *sync.Mutex
+	table map[uint32]*User
+	mutex sync.Mutex
+	pool  sync.Pool
 }
 
 func newUserTable() *userTable {
 	return &userTable{
-		users: make(map[uint32]*User, 512),
-		mutex: &sync.Mutex{},
+		table: make(map[uint32]*User, 256),
+		pool: sync.Pool{
+			New: func() any {
+				return new(User)
+			},
+		},
 	}
+}
+
+func (ut *userTable) NewUser() *User {
+	u := ut.pool.Get().(*User)
+
+	if u.color != "" {
+		*u = User{}
+	}
+
+	return u
+}
+
+func (ut *userTable) ReleaseUser(u *User) {
+	ut.pool.Put(u)
 }
 
 func (ut *userTable) Add(u *User) bool {
 	ut.mutex.Lock()
 	defer ut.mutex.Unlock()
 
-	if ut.users[u.ID] == nil {
-		ut.users[u.ID] = u
+	if ut.table[u.ID] == nil {
+		ut.table[u.ID] = u
 		return true
 	}
 
 	return false
 }
 
-func (ut *userTable) QueryUser(id uint32) *User {
-	q := make(chan *User, 2)
+func (ut *userTable) Query(id uint32) *User {
+	ut.mutex.Lock()
+	defer ut.mutex.Unlock()
 
-	go func() {
-		ut.mutex.Lock()
-		q <- ut.users[id]
-		ut.mutex.Unlock()
-	}()
-
-	// Returns nil if no matching user record was found.
-	return <-q
+	return ut.table[id]
 }

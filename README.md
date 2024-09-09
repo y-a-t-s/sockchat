@@ -4,11 +4,11 @@ A KF chat client.
 
 ## Basic Usage
 
-* Windows: `sockchat_windows_ARCH.exe "$COOKIES"`
+* Windows: `sockchat_windows_ARCH.exe --cookie="$COOKIES"`
 
-* macOS: `./sockchat_macos_ARCH "$COOKIES"`
+* macOS: `./sockchat_macos_ARCH --cookie="$COOKIES"`
 
-* Linux: `./sockchat_linux_ARCH "$COOKIES"` 
+* Linux: `./sockchat_linux_ARCH --cookie="$COOKIES"` 
 
 Where `$COOKIES` is the raw cookies value from the site's header.
 

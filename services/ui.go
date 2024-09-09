@@ -13,7 +13,6 @@ import (
 	"y-a-t-s/sockchat/chat"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/gen2brain/beeep"
 	"github.com/rivo/tview"
 )
 
@@ -87,7 +86,7 @@ func (ui *TUI) newInputBox() *tview.InputField {
 				return ""
 			}
 
-			if u := ui.Chat.Users.QueryUser(uint32(id)); u != nil {
+			if u := ui.Chat.Users.Query(uint32(id)); u != nil {
 				return fmt.Sprintf("@%s,", u.Username)
 			}
 
@@ -122,8 +121,7 @@ func (ui *TUI) newInputBox() *tview.InputField {
 }
 
 func (ui *TUI) incomingHandler(ctx context.Context) {
-	// TODO: Make less stupid
-
+	// Process BBCode tags. Currently limited to formatting.
 	processTags := func(msg string) string {
 		tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
 		return tagRE.ReplaceAllStringFunc(msg, func(tag string) string {
@@ -149,30 +147,15 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 		})
 	}
 
-	// IDs of any messages that mention the user. Used for message highlighting.
+	// IDs of any messages that mention the user. Used for highlighting.
 	var mentionIDs []string
-	highlightMsg := func(msg *chat.ChatMessage) {
-		beeep.Notify("New mention", msg.MessageRaw, "")
-		mentionIDs = append(mentionIDs, string(msg.MessageID))
+	highlightMsg := func(msg *chat.Message) {
+		mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
 		ui.Console.Highlight(mentionIDs...)
 	}
 
-	var mentionRE *regexp.Regexp
-	mentionHandler := func(msg *chat.ChatMessage) {
-		if mentionRE == nil {
-			clientName := ui.Chat.ClientUsername
-			if clientName == "" {
-				return
-			}
-			mentionRE = regexp.MustCompile(fmt.Sprintf("@%s,", clientName))
-		}
-
-		if mentionRE.MatchString(msg.MessageRaw) {
-			highlightMsg(msg)
-		}
-	}
-
-	msgStr := func(msg *chat.ChatMessage) string {
+	// Generate output string for msg.
+	msgStr := func(msg *chat.Message) string {
 		fl := ""
 		if msg.MessageEditDate != 0 {
 			fl = "[::d]*[::D]"
@@ -184,40 +167,58 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			msg.Author.String(fl), msg.MessageID, processTags(msg.MessageRaw))
 	}
 
-	// Buffer for chat history rewrites.
-	bb := bytes.Buffer{}
+	var (
+		// Buffer for chat history rewrites.
+		bb bytes.Buffer
+		// Chat msg feed from socket.
+		feed = ui.Chat.NewFeed()
+	)
 
+	var mre *regexp.Regexp
 	for {
 		select {
 		case <-ctx.Done():
+			ui.Stop()
 			return
-		case hc, ok := <-ui.Chat.History:
-			if hc == nil || !ok {
+		case hc := <-ui.Chat.History:
+			if hc == nil {
 				continue
 			}
 
 			n := 0
-			for m := range hc {
-				if m != nil {
-					bb.WriteString(msgStr(m))
+			for msg := range hc {
+				if msg != nil {
+					bb.WriteString(msgStr(msg))
 					n++
+
+					if msg.IsMention {
+						highlightMsg(msg)
+					}
 				}
 			}
 
+			// Clear before redrawing if we don't have enough
+			// to completely overwrite the history.
 			if n < chat.HIST_LEN {
 				ui.Console.Clear()
 			}
+
 			bb.WriteTo(ui.Console)
 			ui.Console.ScrollToEnd()
-
+			ui.Console.Highlight(mentionIDs...)
 			bb.Reset()
-		case msg, ok := <-ui.Chat.Messages:
-			if msg == nil || !ok {
+		case msg := <-feed:
+			if msg == nil {
 				continue
 			}
 
 			io.WriteString(ui.Console, msgStr(msg))
-			mentionHandler(msg)
+			if un := ui.Chat.Client.Username; mre == nil && un != "" {
+				mre = regexp.MustCompile(fmt.Sprintf("@%s,", un))
+			}
+			if mre != nil && mre.MatchString(msg.MessageRaw) {
+				highlightMsg(msg)
+			}
 			ui.Console.ScrollToEnd()
 		}
 	}

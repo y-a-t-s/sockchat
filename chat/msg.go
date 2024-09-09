@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type ChatMessage struct {
+type Message struct {
 	Author          *User  `json:"author"`
 	Message         string `json:"message"`
 	MessageRaw      string `json:"message_raw"`
@@ -13,13 +13,16 @@ type ChatMessage struct {
 	MessageDate     int64  `json:"message_date"`
 	MessageEditDate int64  `json:"message_edit_date"`
 	RoomID          uint16 `json:"room_id"`
+
+	IsMention bool `json:"-"`
+	debug     bool `json:"-"`
 }
 
-func (msg *ChatMessage) IsEdited() bool {
+func (msg *Message) IsEdited() bool {
 	return msg.MessageEditDate > 0
 }
 
-func (c *Chat) ClientMsg(body string) {
+func (c *Chat) ClientMsg(body string, debug bool) {
 	u := c.pool.NewUser()
 	*u = User{
 		ID:       0,
@@ -27,11 +30,12 @@ func (c *Chat) ClientMsg(body string) {
 	}
 
 	msg := c.pool.NewMsg()
-	*msg = ChatMessage{
+	*msg = Message{
 		Author:      u,
 		MessageDate: time.Now().Unix(),
 		Message:     html.EscapeString(body),
 		MessageRaw:  body,
+		debug:       debug,
 	}
 
 	c.sock.messages <- msg

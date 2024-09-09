@@ -13,7 +13,7 @@ func newChatPool() ChatPool {
 	return ChatPool{
 		msg: &sync.Pool{
 			New: func() any {
-				return new(ChatMessage)
+				return new(Message)
 			},
 		},
 		user: &sync.Pool{
@@ -24,9 +24,9 @@ func newChatPool() ChatPool {
 	}
 }
 
-func (p *ChatPool) NewMsg() *ChatMessage {
-	msg := p.msg.Get().(*ChatMessage)
-	*msg = ChatMessage{
+func (p *ChatPool) NewMsg() *Message {
+	msg := p.msg.Get().(*Message)
+	*msg = Message{
 		Author: p.NewUser(),
 	}
 
@@ -43,7 +43,7 @@ func (p *ChatPool) NewUser() *User {
 
 func (p *ChatPool) Release(obj interface{}) {
 	switch obj.(type) {
-	case *ChatMessage:
+	case *Message:
 		p.msg.Put(obj)
 	case *User:
 		p.user.Put(obj)
