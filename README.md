@@ -4,11 +4,11 @@ A KF chat client.
 
 ## Basic Usage
 
-* Windows: `sockchat_windows_ARCH.exe --cookie="$COOKIES"`
+* Windows: `sockchat_windows_ARCH.exe --cookies="$COOKIES"`
 
-* macOS: `./sockchat_macos_ARCH --cookie="$COOKIES"`
+* macOS: `./sockchat_macos_ARCH --cookies="$COOKIES"`
 
-* Linux: `./sockchat_linux_ARCH --cookie="$COOKIES"` 
+* Linux: `./sockchat_linux_ARCH --cookies="$COOKIES"` 
 
 Where `$COOKIES` is the raw cookies value from the site's header.
 
@@ -17,7 +17,7 @@ Where `$COOKIES` is the raw cookies value from the site's header.
 Use the network tab in your browser's dev tools to find the `chat.ws` connection on the forum's homepage. Your cookies are found in the request header. It looks a little something like this:
 
 ``` sh
-xf_tfa_trust=VALUE; xf_user=VALUE; xf_emoji_usage=VALUE; xf_csrf=VALUE; xf_session=VALUE
+xf_tfa_trust=VALUE; xf_user=VALUE; xf_csrf=VALUE; xf_session=VALUE
 ```
 
 You don't need all of these values to be present. Whatever your browser uses to connect and log you in will work fine.
