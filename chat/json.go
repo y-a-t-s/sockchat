@@ -36,7 +36,7 @@ func (c *Chat) parseResponse(ctx context.Context) {
 		msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 
 		if qu := c.Users.Query(msg.Author.ID); qu != nil {
-			c.Users.ReleaseUser(msg.Author)
+			c.pool.Release(msg.Author)
 			msg.Author = qu
 		} else {
 			c.sock.userData <- msg.Author

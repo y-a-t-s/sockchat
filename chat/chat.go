@@ -77,6 +77,10 @@ func NewChat(ctx context.Context) (c *Chat, err error) {
 		mutex:    &sync.Mutex{},
 	}
 
+	context.AfterFunc(ctx, func() {
+		close(c.Users.in)
+	})
+
 	return
 }
 
@@ -249,7 +253,7 @@ func (c *Chat) router(ctx context.Context) {
 				}
 
 				if !c.Users.Add(u) {
-					c.Users.ReleaseUser(u)
+					c.pool.Release(u)
 				}
 			}
 		}

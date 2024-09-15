@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"y-a-t-s/sockchat/config"
@@ -29,7 +28,6 @@ const USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox
 
 type sock struct {
 	*websocket.Conn
-	mutex *sync.RWMutex
 
 	kf *libkiwi.KF
 
@@ -71,7 +69,6 @@ func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 
 	s = &sock{
 		Conn:     nil,
-		mutex:    &sync.RWMutex{},
 		errLog:   make(chan error, 8),
 		infoLog:  make(chan string, 64),
 		debug:    make(chan string, 16),
@@ -150,13 +147,7 @@ func (s *sock) setUrl(addr string, port uint16) error {
 	return nil
 }
 
-func (s *sock) connect(ctx context.Context) (err error) {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
+func (s *sock) connect(ctx context.Context) error {
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
 		EnableCompression: true,
@@ -170,65 +161,33 @@ func (s *sock) connect(ctx context.Context) (err error) {
 
 	s.disconnect()
 
-	// Try connecting for a minute, at most.
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
+	s.infoLog <- "Opening socket..."
 
-	go func() {
-		defer cancel()
-
-		s.mutex.Lock()
-
-		s.infoLog <- "Opening socket..."
-
-		// UA defined up here to make the redundant slice warning fuck off.
-		ua := []string{USER_AGENT}
-		conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
-			"Cookie":     s.cookies,
-			"User-Agent": ua,
-		})
-		if err != nil {
-			return
-		}
-
-		conn.EnableWriteCompression(true)
-
-		// Set s.conn at the end to avoid early access.
-		s.Conn = conn
-
-		s.mutex.Unlock()
-	}()
-
-	<-ctx.Done()
+	// UA defined up here to make the redundant slice warning fuck off.
+	ua := []string{USER_AGENT}
+	conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
+		"Cookie":     s.cookies,
+		"User-Agent": ua,
+	})
 	if err != nil {
-		return
+		return err
 	}
+	conn.EnableWriteCompression(true)
+	// Set s.Conn at the end to avoid early access.
+	s.Conn = conn
 
 	// Send /join message for desired room.
 	s.Out <- fmt.Sprintf("/join %d", s.room)
-
 	s.infoLog <- "Connected."
 
 	return nil
 }
 
 func (s *sock) disconnect() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	go func() {
-		defer cancel()
-
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
-
-		if s.Conn != nil {
-			s.Conn.Close()
-			s.Conn = nil
-		}
-	}()
-
-	<-ctx.Done()
+	if s.Conn != nil {
+		s.Conn.Close()
+		s.Conn = nil
+	}
 }
 
 // Tries reconnecting 8 times.
@@ -253,33 +212,16 @@ func (s *sock) reconnect(ctx context.Context) error {
 }
 
 func (s *sock) write(ctx context.Context, msg string) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	if s.Conn == nil {
+		return &errSocketClosed{}
+	}
 
-	go func() {
-		defer cancel()
+	out := bytes.TrimSpace([]byte(msg))
+	if len(out) == 0 {
+		return errors.New("Outgoing msg is empty.")
+	}
 
-		// May seem counterintuitive, but we're "reading" the Conn pointer.
-		s.mutex.RLock()
-		defer s.mutex.RUnlock()
-
-		if s.Conn == nil {
-			err = &errSocketClosed{}
-			return
-		}
-
-		out := bytes.TrimSpace([]byte(msg))
-		if len(out) == 0 {
-			err = errors.New("Outgoing msg is empty.")
-			return
-		}
-
-		err = s.WriteMessage(websocket.TextMessage, out)
-	}()
-
-	<-ctx.Done()
-
-	return
+	return s.WriteMessage(websocket.TextMessage, out)
 }
 
 func (s *sock) msgReader(ctx context.Context) {
@@ -289,39 +231,19 @@ func (s *sock) msgReader(ctx context.Context) {
 	}
 
 	readMsg := func() (msg []byte, err error) {
-		s.mutex.RLock()
-		defer s.mutex.RUnlock()
-
 		if s.Conn == nil {
 			return nil, &errSocketClosed{}
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-
-		go func() {
-			defer cancel()
-
-			_, msg, err = s.ReadMessage()
-			if err != nil {
-				s.infoLog <- "Failed to read from socket.\n"
-			}
-		}()
-
-		<-ctx.Done()
-
-		switch {
-		case err != nil:
-			return
-		case len(msg) == 0:
-			err = &errReadTimedOut{s.room}
+		_, msg, err = s.ReadMessage()
+		if err != nil {
+			s.infoLog <- "Failed to read from socket.\n"
 			return
 		}
 
 		return
 	}
 
-	var ert *errReadTimedOut
 	for {
 		select {
 		case <-ctx.Done():
@@ -331,10 +253,8 @@ func (s *sock) msgReader(ctx context.Context) {
 
 		msg, err := readMsg()
 		if err != nil {
-			if !errors.As(err, &ert) {
-				s.disconnect()
-				s.connect(ctx)
-			}
+			s.disconnect()
+			s.connect(ctx)
 			continue
 		}
 
@@ -389,7 +309,7 @@ func (s *sock) router(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case m := <-retry:
-			go s.write(ctx, m)
+			s.write(ctx, m)
 		case m := <-s.Out:
 			isJoin := joinRE.MatchString(m)
 			switch {
@@ -406,13 +326,11 @@ func (s *sock) router(ctx context.Context) {
 					s.room = uint(room)
 				}
 
-				go func() {
-					err := s.write(ctx, m)
-					if err != nil {
-						s.infoLog <- fmt.Sprintf("Failed to send: %s\nError: %s\n", m, err)
-						retry <- m
-					}
-				}()
+				err := s.write(ctx, m)
+				if err != nil {
+					s.infoLog <- fmt.Sprintf("Failed to send: %s\nError: %s\n", m, err)
+					retry <- m
+				}
 			}
 		}
 	}

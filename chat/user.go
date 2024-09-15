@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"sync"
 )
 
 type User struct {
@@ -37,7 +36,6 @@ func (u *User) SetColor() {
 
 func (u *User) String(fl string) string {
 	color := u.Color()
-
 	// This is kinda ugly, so I'll explain:
 	// [%s::u] is a UI style tag for the color and enabling underlining.
 	// [-] clears the set color to print the ID (the %d value).
@@ -48,52 +46,66 @@ func (u *User) String(fl string) string {
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s])%s:[-::U]", color, strings.ReplaceAll(u.Username, "]", "[]"), u.ID, color, fl)
 }
 
+type userQuery struct {
+	id  uint32
+	res chan<- *User
+}
+
 type userTable struct {
-	table map[uint32]*User
-	mutex sync.Mutex
-	pool  sync.Pool
+	in      chan<- *User
+	queries chan userQuery
 }
 
 func newUserTable() *userTable {
-	return &userTable{
-		table: make(map[uint32]*User, 256),
-		pool: sync.Pool{
-			New: func() any {
-				return new(User)
-			},
-		},
+	ut := &userTable{
+		queries: make(chan userQuery, 4),
 	}
+	ut.in = ut.run()
+	return ut
 }
 
-func (ut *userTable) NewUser() *User {
-	u := ut.pool.Get().(*User)
+func (ut *userTable) run() chan<- *User {
+	in := make(chan *User, 64)
+	table := make(map[uint32]*User, 256)
 
-	if u.color != "" {
-		*u = User{}
-	}
+	go func() {
+		for {
+			select {
+			case u, ok := <-in:
+				switch {
+				case !ok:
+					return
+				case u == nil:
+					continue
+				}
 
-	return u
-}
+				if table[u.ID] == nil {
+					table[u.ID] = u
+				}
+			case uq := <-ut.queries:
+				uq.res <- table[uq.id]
+				close(uq.res)
+			}
+		}
+	}()
 
-func (ut *userTable) ReleaseUser(u *User) {
-	ut.pool.Put(u)
+	return in
 }
 
 func (ut *userTable) Add(u *User) bool {
-	ut.mutex.Lock()
-	defer ut.mutex.Unlock()
-
-	if ut.table[u.ID] == nil {
-		ut.table[u.ID] = u
-		return true
+	if ut.Query(u.ID) != nil {
+		return false
 	}
 
-	return false
+	if u != nil {
+		ut.in <- u
+	}
+
+	return true
 }
 
 func (ut *userTable) Query(id uint32) *User {
-	ut.mutex.Lock()
-	defer ut.mutex.Unlock()
-
-	return ut.table[id]
+	res := make(chan *User, 2)
+	ut.queries <- userQuery{id, res}
+	return <-res
 }
