@@ -33,6 +33,7 @@ import (
 	"syscall"
 
 	"y-a-t-s/sockchat/chat"
+	"y-a-t-s/sockchat/config"
 	"y-a-t-s/sockchat/services"
 )
 
@@ -54,14 +55,34 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), sigs...)
 	defer cancel()
 
-	c, err := chat.NewChat(ctx)
+	// WaitGroup for main worker routines.
+	// Ensures all routines terminate before the program exits.
+	var wg sync.WaitGroup
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return
+	}
+	// Preserve original cfg before overwriting values during arg parsing.
+	// If we didn't, temporary args would be applied to the config on exit.
+	args := cfg
+
+	err = args.ParseArgs()
+	if err != nil {
+		return
+	}
+
+	c, err := chat.NewChat(ctx, args)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	// WaitGroup for main worker routines.
-	// Ensures all routines terminate before the program exits.
-	var wg sync.WaitGroup
+	wg.Add(1)
+	context.AfterFunc(ctx, func() {
+		defer wg.Done()
+		cfg.Cookies = c.Cfg.Cookies
+		cfg.Save()
+	})
 
 	wg.Add(1)
 	go func() {

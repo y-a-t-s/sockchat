@@ -16,27 +16,32 @@ type Message struct {
 
 	IsMention bool `json:"-"`
 	debug     bool `json:"-"`
+
+	pool *ChatPool
 }
 
 func (msg *Message) IsEdited() bool {
 	return msg.MessageEditDate > 0
 }
 
-func (c *Chat) ClientMsg(body string, debug bool) {
-	u := c.pool.NewUser()
-	*u = User{
-		ID:       0,
-		Username: "sockchat",
+func (msg *Message) Release() {
+	msg.Author = nil
+	*msg = Message{
+		pool: msg.pool,
 	}
 
+	msg.pool.Release(msg)
+}
+
+func (c *Chat) ClientMsg(body string, debug bool) {
 	msg := c.pool.NewMsg()
-	*msg = Message{
-		Author:      u,
-		MessageDate: time.Now().Unix(),
-		Message:     html.EscapeString(body),
-		MessageRaw:  body,
-		debug:       debug,
-	}
+
+	msg.Author.ID = 0
+	msg.Author.Username = "sockchat"
+	msg.MessageDate = time.Now().Unix()
+	msg.Message = html.EscapeString(body)
+	msg.MessageRaw = body
+	msg.debug = debug
 
 	c.sock.messages <- msg
 }

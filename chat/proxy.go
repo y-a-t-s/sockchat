@@ -62,11 +62,11 @@ func newSocksDialer(cfg config.Config) (p *socksProxy, err error) {
 
 func startTor(ctx context.Context) (p *socksProxy, err error) {
 	log.Println("Connecting to Tor network...")
+
 	ti, err := tor.Start(ctx, nil)
 	if err != nil {
 		return
 	}
-
 	td, err := ti.Dialer(ctx, nil)
 	if err != nil {
 		return
@@ -80,12 +80,10 @@ func startTor(ctx context.Context) (p *socksProxy, err error) {
 }
 
 func (p *socksProxy) stopTor() {
-	if p.tor == nil {
-		return
+	if p.tor != nil {
+		log.Println("Stopping Tor.")
+
+		p.tor.Close()
+		p.tor = nil
 	}
-
-	log.Println("Stopping Tor.")
-
-	p.tor.Close()
-	p.tor = nil
 }

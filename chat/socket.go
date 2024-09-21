@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"y-a-t-s/sockchat/config"
@@ -20,31 +21,59 @@ import (
 	"github.com/y-a-t-s/libkiwi"
 )
 
-// Max chat history length.
-const HIST_LEN = 512
+const (
+	// Max chat history length.
+	HIST_LEN = 512
+	// User-Agent string for headers.
+	USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"
+)
 
-// User-Agent string for headers.
-const USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"
-
-type sock struct {
-	*websocket.Conn
-
-	kf *libkiwi.KF
-
+type sockIO struct {
+	debug   chan string
 	errLog  chan error
 	infoLog chan string
-	debug   chan string
 
 	chatJson chan []byte
 	messages chan *Message
-	userData chan *User
+	users    chan *User
 	Out      chan string
 
-	cookies  []string
-	readOnly bool
-	room     uint
-	url      *url.URL
-	proxy    *socksProxy
+	once sync.Once
+}
+
+func newSockIO() *sockIO {
+	return &sockIO{
+		debug:    make(chan string, 16),
+		errLog:   make(chan error, 8),
+		infoLog:  make(chan string, 64),
+		chatJson: make(chan []byte, 64),
+		messages: make(chan *Message, HIST_LEN),
+		users:    make(chan *User, 256),
+		Out:      make(chan string, 16),
+	}
+}
+
+func (sio *sockIO) CloseAll() {
+	sio.once.Do(func() {
+		// close(sio.errLog)
+		// close(sio.infoLog)
+		close(sio.debug)
+		close(sio.chatJson)
+		close(sio.messages)
+		close(sio.users)
+		close(sio.Out)
+	})
+}
+
+type sock struct {
+	*websocket.Conn
+	*sockIO
+
+	proxy *socksProxy
+	url   *url.URL
+
+	cfg config.Config
+	kf  *libkiwi.KF
 }
 
 // Split the protocol part from addresses in the config, if present.
@@ -64,59 +93,48 @@ func parseHost(addr string) (*url.URL, error) {
 	}, nil
 }
 
-func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
-	cookies := []string{cfg.Cookies}
-
-	s = &sock{
-		Conn:     nil,
-		errLog:   make(chan error, 8),
-		infoLog:  make(chan string, 64),
-		debug:    make(chan string, 16),
-		chatJson: make(chan []byte, 64),
-		messages: make(chan *Message, 1024),
-		userData: make(chan *User, 256),
-		Out:      make(chan string, 16),
-		cookies:  cookies,
-		readOnly: cfg.ReadOnly,
-		room:     cfg.Room,
+func newSocket(ctx context.Context, cfg config.Config) (*sock, error) {
+	s := &sock{
+		sockIO: newSockIO(),
+		cfg:    cfg,
 	}
 
-	err = s.setUrl(cfg.Host, uint16(cfg.Port))
+	err := s.setUrl(cfg.Host, uint16(cfg.Port))
 	if err != nil {
-		return
+		return nil, err
 	}
 	if strings.HasSuffix(s.url.Hostname(), ".onion") {
 		cfg.Tor.Enabled = true
 		cfg.Tor.Clearnet = false
 	}
 
-	var p *socksProxy
 	switch {
 	case cfg.Tor.Enabled:
 		// Set socket URL to onion domain if desired.
-		if cfg.Tor.Clearnet == false {
+		if !cfg.Tor.Clearnet {
 			err = s.setUrl(cfg.Tor.Onion, uint16(cfg.Port))
 			if err != nil {
-				return
+				return nil, err
 			}
 
 			log.Printf("Connecting to onion service: %s\nMake sure this domain is correct.\n", s.url.Hostname())
 			time.Sleep(3 * time.Second)
 		}
 
-		p, err = startTor(ctx)
+		s.proxy, err = startTor(ctx)
 		if err != nil {
-			return
+			return nil, err
 		}
 	case cfg.Proxy.Enabled:
-		p, err = newSocksDialer(cfg)
+		s.proxy, err = newSocksDialer(cfg)
 		if err != nil {
 			return nil, err
 		}
 	}
-	s.proxy = p
 
 	hc := http.Client{}
+
+	// Will be default transport if s.proxy is nil.
 	if s.proxy != nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.DialContext = s.proxy.DialContext
@@ -125,11 +143,11 @@ func newSocket(ctx context.Context, cfg config.Config) (s *sock, err error) {
 
 	kf, err := libkiwi.NewKF(hc, s.url.Hostname(), cfg.Cookies)
 	if err != nil {
-		return
+		return nil, err
 	}
 	s.kf = kf
 
-	return
+	return s, nil
 }
 
 func (s *sock) setUrl(addr string, port uint16) error {
@@ -148,6 +166,16 @@ func (s *sock) setUrl(addr string, port uint16) error {
 }
 
 func (s *sock) connect(ctx context.Context) error {
+	s.disconnect()
+
+	s.infoLog <- "Opening socket..."
+
+	// defined up here to make the redundant slice warning fuck off.
+	var (
+		ua      = []string{USER_AGENT}
+		cookies = []string{s.cfg.Cookies}
+	)
+
 	// Create new WebSocket dialer, routing through any applicable proxies.
 	wd := websocket.Dialer{
 		EnableCompression: true,
@@ -155,18 +183,11 @@ func (s *sock) connect(ctx context.Context) error {
 		HandshakeTimeout: time.Minute * 5,
 	}
 	if s.proxy != nil {
-		// Dial socket through proxy context.
 		wd.NetDialContext = s.proxy.DialContext
 	}
 
-	s.disconnect()
-
-	s.infoLog <- "Opening socket..."
-
-	// UA defined up here to make the redundant slice warning fuck off.
-	ua := []string{USER_AGENT}
 	conn, _, err := wd.DialContext(ctx, s.url.String(), map[string][]string{
-		"Cookie":     s.cookies,
+		"Cookie":     cookies,
 		"User-Agent": ua,
 	})
 	if err != nil {
@@ -177,7 +198,7 @@ func (s *sock) connect(ctx context.Context) error {
 	s.Conn = conn
 
 	// Send /join message for desired room.
-	s.Out <- fmt.Sprintf("/join %d", s.room)
+	s.Out <- fmt.Sprintf("/join %d", s.cfg.Room)
 	s.infoLog <- "Connected."
 
 	return nil
@@ -211,7 +232,7 @@ func (s *sock) reconnect(ctx context.Context) error {
 	}
 }
 
-func (s *sock) write(ctx context.Context, msg string) (err error) {
+func (s *sock) write(msg string) (err error) {
 	if s.Conn == nil {
 		return &errSocketClosed{}
 	}
@@ -230,20 +251,6 @@ func (s *sock) msgReader(ctx context.Context) {
 		panic(err)
 	}
 
-	readMsg := func() (msg []byte, err error) {
-		if s.Conn == nil {
-			return nil, &errSocketClosed{}
-		}
-
-		_, msg, err = s.ReadMessage()
-		if err != nil {
-			s.infoLog <- "Failed to read from socket.\n"
-			return
-		}
-
-		return
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -251,10 +258,15 @@ func (s *sock) msgReader(ctx context.Context) {
 		default:
 		}
 
-		msg, err := readMsg()
+		if s.Conn == nil {
+			s.reconnect(ctx)
+			continue
+		}
+
+		_, msg, err := s.ReadMessage()
 		if err != nil {
-			s.disconnect()
-			s.connect(ctx)
+			s.infoLog <- "Failed to read from socket.\n"
+			s.reconnect(ctx)
 			continue
 		}
 
@@ -267,10 +279,10 @@ func (s *sock) msgReader(ctx context.Context) {
 			s.infoLog <- "Session expired. Refreshing token..."
 			_, err := s.kf.RefreshSession(ctx)
 			if err != nil {
-				continue
+				panic(err)
 			}
-			s.cookies[0] = s.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
-			s.disconnect()
+			s.cfg.Cookies = s.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
+			s.connect(ctx)
 		default:
 			s.infoLog <- ms
 		}
@@ -293,27 +305,18 @@ func (s *sock) router(ctx context.Context) {
 		case "!q", "!quit":
 			return
 		case "!reconnect":
-			go s.disconnect()
+			s.disconnect()
 		}
 	}
-
-	retry := make(chan string, 4)
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go s.msgReader(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case m := <-retry:
-			s.write(ctx, m)
 		case m := <-s.Out:
 			isJoin := joinRE.MatchString(m)
 			switch {
-			case s.readOnly && !isJoin:
+			case s.cfg.ReadOnly && !isJoin:
 				continue
 			case m[0] == '!':
 				cmdHandler(m)
@@ -323,13 +326,12 @@ func (s *sock) router(ctx context.Context) {
 					if err != nil {
 						s.errLog <- err
 					}
-					s.room = uint(room)
+					s.cfg.Room = uint(room)
 				}
 
-				err := s.write(ctx, m)
+				err := s.write(m)
 				if err != nil {
 					s.infoLog <- fmt.Sprintf("Failed to send: %s\nError: %s\n", m, err)
-					retry <- m
 				}
 			}
 		}
@@ -337,13 +339,28 @@ func (s *sock) router(ctx context.Context) {
 }
 
 func (s *sock) Start(ctx context.Context) {
-	s.connect(ctx)
-	s.router(ctx)
+	var wg sync.WaitGroup
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		s.msgReader(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		s.router(ctx)
+	}()
+	stopf := context.AfterFunc(ctx, func() {
+		defer wg.Done()
+		s.Stop()
+	})
+	defer stopf()
+
+	wg.Wait()
 }
 
 func (s *sock) Stop() {
 	s.disconnect()
-
 	if s.proxy != nil {
 		s.proxy.stopTor()
 	}

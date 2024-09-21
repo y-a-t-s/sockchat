@@ -2,58 +2,20 @@ package chat
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-type logfile struct {
-	file   *os.File
-	writer *bufio.Writer
+const _DATE_FMT = "2006-01-02 15_04_05 MST"
+const _LOG_FMT = "[%s] [%s (#%d)]%s: %s\n"
+
+func openLog(name string) (*os.File, error) {
+	return os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 }
-
-func openLog(name string) (lf logfile, err error) {
-	f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	bw := bufio.NewWriter(f)
-
-	lf = logfile{
-		file:   f,
-		writer: bw,
-	}
-	return
-}
-
-func (lf *logfile) Close() {
-	if lf.writer != nil {
-		lf.writer.Flush()
-		lf.writer = nil
-	}
-
-	if lf.file != nil {
-		lf.file.Close()
-		lf.file = nil
-	}
-}
-
-type logger struct {
-	chatLog logfile
-	errLog  logfile
-
-	feed chan *Message
-	errs *slog.Logger
-
-	logDir string
-}
-
-const dateFmt = "2006-01-02 15_04_05 MST"
 
 func newLogDir(baseDir string) (string, error) {
 	outDir := filepath.Join(baseDir, time.Now().Format("2006-01-02"))
@@ -70,86 +32,41 @@ func newLogDir(baseDir string) (string, error) {
 	return outDir, nil
 }
 
-func newLogger(chat bool) (l logger, err error) {
+func startLogger(in <-chan Message) error {
 	cfgDir, err := os.UserConfigDir()
 	if err != nil {
-		return
+		return err
 	}
 	baseDir := filepath.Join(cfgDir, "sockchat/logs")
-
 	logDir, err := newLogDir(baseDir)
 	if err != nil {
-		return
-	}
-	l.logDir = logDir
-
-	if chat {
-		l.chatLog, err = l.newChatLog()
-		if err != nil {
-			return
-		}
+		return err
 	}
 
-	elFile, err := l.newErrLog()
+	lf, err := openLog(filepath.Join(logDir, fmt.Sprintf("%s.log", time.Now().Format(_DATE_FMT))))
 	if err != nil {
-		return
+		return err
 	}
-	elw := bufio.NewWriter(elFile.file)
-	l.errs = slog.New(slog.NewTextHandler(elw, nil))
+	lw := bufio.NewWriter(lf)
 
-	l.feed = l.newMsgFeed()
+	go func() {
+		defer func() {
+			lw.Flush()
+			lf.Close()
+		}()
 
-	return
-}
-
-func (l *logger) newChatLog() (lf logfile, err error) {
-	// See time.Format docs to make sense of the date string.
-	// Note: Windows doesn't allow ':' in file names. Use '_' instead.
-
-	if l.feed == nil {
-		l.feed = l.newMsgFeed()
-	}
-
-	return openLog(filepath.Join(l.logDir, fmt.Sprintf("%s.log", time.Now().Format(dateFmt))))
-}
-
-func (l *logger) newErrLog() (lf logfile, err error) {
-	return openLog(filepath.Join(l.logDir, fmt.Sprintf("%s error.log", time.Now().Format(dateFmt))))
-}
-
-func (l *logger) newMsgFeed() chan *Message {
-	feed := make(chan *Message, 1024)
-	l.feed = feed
-	return feed
-}
-
-func (l *logger) Start(ctx context.Context) {
-	defer func() {
-		l.Stop()
-	}()
-
-	const logFmt = "[%s] [%s (#%d)]%s: %s\n"
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-l.feed:
-			if l.chatLog.writer == nil {
-				continue
-			}
-
+		for msg := range in {
 			fl := ""
 			if msg.IsEdited() {
 				fl += "*"
 			}
 
-			fmt.Fprintf(l.chatLog.writer, logFmt, time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
+			fmt.Fprintf(lw, _LOG_FMT, time.Unix(msg.MessageDate, 0).Format("2006-01-02 15:04:05 MST"),
 				msg.Author.Username, msg.Author.ID, fl, msg.MessageRaw)
-		}
-	}
-}
 
-func (l *logger) Stop() {
-	l.chatLog.Close()
-	l.errLog.Close()
+			msg.Release()
+		}
+	}()
+
+	return nil
 }

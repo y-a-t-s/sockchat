@@ -9,7 +9,7 @@ import (
 	"html"
 )
 
-type chatData struct {
+type jsonData struct {
 	// Using json.RawMessage to delay parsing these parts.
 	Messages json.RawMessage `json:"messages"`
 	Users    json.RawMessage `json:"users"`
@@ -22,7 +22,7 @@ func (c *Chat) parseResponse(ctx context.Context) {
 			return err
 		}
 
-		c.sock.userData <- u
+		c.Users.AddUser(u)
 		return nil
 	}
 
@@ -33,14 +33,10 @@ func (c *Chat) parseResponse(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
 
-		if qu := c.Users.Query(msg.Author.ID); qu != nil {
-			c.pool.Release(msg.Author)
-			msg.Author = qu
-		} else {
-			c.sock.userData <- msg.Author
-		}
+		msg.MessageRaw = html.UnescapeString(msg.MessageRaw)
+		u := c.Users.AddUser(msg.Author)
+		msg.Author = u
 
 		return
 	}
@@ -82,21 +78,21 @@ func (c *Chat) parseResponse(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case m := <-c.sock.chatJson:
-			var sm chatData
-			if err := json.Unmarshal(m, &sm); err != nil {
+			var jsd jsonData
+			if err := json.Unmarshal(m, &jsd); err != nil {
 				c.ClientMsg(fmt.Sprintf("Failed to parse server response.\nResponse: %s\n", m), false)
 				continue
 			}
 
-			if len(sm.Users) > 0 {
+			if len(jsd.Users) > 0 {
 				var u *User
 				// Can do async, since order doesn't matter as much here.
-				go parseJson(sm.Users, u)
+				go parseJson(jsd.Users, u)
 			}
 
-			if len(sm.Messages) > 0 {
+			if len(jsd.Messages) > 0 {
 				var m *Message
-				parseJson(sm.Messages, m)
+				parseJson(jsd.Messages, m)
 			}
 		}
 	}

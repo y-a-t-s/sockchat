@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Config object with set parameters.
@@ -23,10 +24,11 @@ type Config struct {
 	Proxy proxyConfig `json:"proxy"`
 	Tor   torConfig   `json:"tor"`
 
-	// ApiMode bool `json:",omitempty"`
+	// ApiMode bool `json:"-"`
 
 	// Used for collecting remaining args, containing cookies.
 	Args []string `json:",omitempty"`
+	mx   *sync.Mutex
 }
 
 type torConfig struct {
@@ -69,6 +71,9 @@ func LoadConfig() (cfg Config, err error) {
 	// New keys get set to defaults and saved.
 	cfg = newConfig()
 
+	cfg.mx.Lock()
+	defer cfg.mx.Unlock()
+
 	f, err := openConfig()
 	if err != nil {
 		return
@@ -84,7 +89,7 @@ func LoadConfig() (cfg Config, err error) {
 	}
 
 	// Truncate and write loaded config with any potential new keys.
-	cfg.writeConfig(f)
+	go cfg.writeConfig(f)
 
 	return
 }
@@ -125,6 +130,7 @@ func newConfig() Config {
 			Pass:    "",
 		},
 		Tor: newTorConfig(),
+		mx:  &sync.Mutex{},
 	}
 }
 
@@ -204,7 +210,11 @@ func (cfg *Config) Save() error {
 }
 
 // f may be provided to reduce the number of file opens but is not required.
-func (cfg *Config) writeConfig(f *os.File) (err error) {
+func (cfg *Config) writeConfig(f *os.File) error {
+	cfg.mx.Lock()
+	defer cfg.mx.Unlock()
+
+	var err error // Used to prevent shadowing f in the if block.
 	if f == nil {
 		f, err = openConfig()
 		if err != nil {

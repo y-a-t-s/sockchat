@@ -37,12 +37,13 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 		SetDynamicColors(true).
 		SetMaxLines(chat.HIST_LEN).
 		SetRegions(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			ui.Draw()
-		})
+		SetScrollable(true)
+
+	// When scrolled to the bottom, the textview will auto-scroll as msgs come in.
+	ui.Console.ScrollToEnd()
 	// Returns *tview.Box, so keep separate from assignment.
 	ui.Console.SetBorder(false)
+
 	ui.Console.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyBacktab:
@@ -58,7 +59,8 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 	})
 
 	ui.flex.AddItem(ui.Console, 0, 1, false)
-	if !ui.Chat.Cfg.ReadOnly {
+	// Don't enable msg input box in RO mode.
+	if !c.Cfg.ReadOnly {
 		ui.inputBox = ui.newInputBox()
 		ui.flex.AddItem(ui.inputBox, 1, 1, true)
 	}
@@ -121,6 +123,23 @@ func (ui *TUI) newInputBox() *tview.InputField {
 }
 
 func (ui *TUI) incomingHandler(ctx context.Context) {
+	defer ui.Stop()
+
+	var (
+		bb         bytes.Buffer // Buffer for quick chat history rewrites.
+		mentionIDs []string     // IDs of msgs that mention the user. Used for highlighting.
+		mre        *regexp.Regexp
+
+		prevID uint32 = 0
+	)
+
+	ui.QueueUpdate(func() {
+		ui.Console.Highlight(mentionIDs...)
+	})
+	ui.Console.SetChangedFunc(func() {
+		ui.Draw()
+	})
+
 	// Process BBCode tags. Currently limited to formatting.
 	processTags := func(msg string) string {
 		tagRE := regexp.MustCompile(`\[(/?.+?)(="?(.*?)"?)?\]`)
@@ -147,13 +166,6 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 		})
 	}
 
-	// IDs of any messages that mention the user. Used for highlighting.
-	var mentionIDs []string
-	highlightMsg := func(msg *chat.Message) {
-		mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-		ui.Console.Highlight(mentionIDs...)
-	}
-
 	// Generate output string for msg.
 	msgStr := func(msg *chat.Message) string {
 		fl := ""
@@ -167,18 +179,13 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			msg.Author.String(fl), msg.MessageID, processTags(msg.MessageRaw))
 	}
 
-	var (
-		// Buffer for chat history rewrites.
-		bb bytes.Buffer
-		// Chat msg feed from socket.
-		feed = ui.Chat.NewFeed()
-	)
+	// Chat msg feed from socket.
+	feed := ui.Chat.Feeder.NewFeed()
+	defer feed.Close()
 
-	var mre *regexp.Regexp
 	for {
 		select {
 		case <-ctx.Done():
-			ui.Stop()
 			return
 		case hc := <-ui.Chat.History:
 			if hc == nil {
@@ -186,40 +193,38 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			}
 
 			n := 0
+			mentionIDs = make([]string, 0, len(mentionIDs))
 			for msg := range hc {
-				if msg != nil {
-					bb.WriteString(msgStr(msg))
-					n++
+				if msg == nil {
+					continue
+				}
+				id := msg.MessageID
 
-					if msg.IsMention {
-						highlightMsg(msg)
-					}
+				bb.WriteString(msgStr(msg))
+				n++
+
+				if msg.IsMention {
+					mentionIDs = append(mentionIDs, fmt.Sprint(id))
 				}
 			}
 
-			// Clear before redrawing if we don't have enough
-			// to completely overwrite the history.
-			if n < chat.HIST_LEN {
-				ui.Console.Clear()
-			}
-
+			ui.Console.Clear()
 			bb.WriteTo(ui.Console)
-			ui.Console.ScrollToEnd()
-			ui.Console.Highlight(mentionIDs...)
 			bb.Reset()
-		case msg := <-feed:
-			if msg == nil {
+		case msg := <-feed.Feed:
+			if msg.IsEdited() && msg.MessageID <= prevID {
 				continue
 			}
 
-			io.WriteString(ui.Console, msgStr(msg))
+			io.WriteString(ui.Console, msgStr(&msg))
 			if un := ui.Chat.Client.Username; mre == nil && un != "" {
 				mre = regexp.MustCompile(fmt.Sprintf("@%s,", un))
 			}
-			if mre != nil && mre.MatchString(msg.MessageRaw) {
-				highlightMsg(msg)
-			}
-			ui.Console.ScrollToEnd()
+			// if mre != nil && mre.MatchString(msg.MessageRaw) {
+			// mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
+			// }
+
+			prevID = msg.MessageID
 		}
 	}
 }

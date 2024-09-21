@@ -4,9 +4,9 @@ A KF chat client.
 
 ## Basic Usage
 
-* Windows: `sockchat_windows_ARCH.exe --cookies="$COOKIES"`
+* Windows: `sockchat_ARCH.exe --cookies="$COOKIES"`
 
-* macOS: `./sockchat_macos_ARCH --cookies="$COOKIES"`
+* macOS: `./sockchat_macos --cookies="$COOKIES"`
 
 * Linux: `./sockchat_linux_ARCH --cookies="$COOKIES"` 
 

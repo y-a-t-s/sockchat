@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 )
 
 type User struct {
@@ -12,6 +13,7 @@ type User struct {
 	AvatarURL string `json:"avatar_url"`
 
 	color string
+	pool  *ChatPool
 }
 
 func (u *User) Color() string {
@@ -20,6 +22,25 @@ func (u *User) Color() string {
 	}
 
 	return u.color
+}
+
+func (u *User) Copy() *User {
+	if u.pool == nil {
+		return nil
+	}
+
+	nu := u.pool.NewUser()
+	*nu = *u
+	return nu
+}
+
+func (u *User) Release() {
+	*u = User{
+		pool: u.pool,
+	}
+	if u.pool != nil {
+		u.pool.Release(u)
+	}
 }
 
 func (u *User) SetColor() {
@@ -46,66 +67,32 @@ func (u *User) String(fl string) string {
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s])%s:[-::U]", color, strings.ReplaceAll(u.Username, "]", "[]"), u.ID, color, fl)
 }
 
-type userQuery struct {
-	id  uint32
-	res chan<- *User
-}
-
 type userTable struct {
-	in      chan<- *User
-	queries chan userQuery
+	sync.Map
 }
 
-func newUserTable() *userTable {
-	ut := &userTable{
-		queries: make(chan userQuery, 4),
-	}
-	ut.in = ut.run()
-	return ut
-}
-
-func (ut *userTable) run() chan<- *User {
-	in := make(chan *User, 64)
-	table := make(map[uint32]*User, 256)
-
-	go func() {
-		for {
-			select {
-			case u, ok := <-in:
-				switch {
-				case !ok:
-					return
-				case u == nil:
-					continue
-				}
-
-				if table[u.ID] == nil {
-					table[u.ID] = u
-				}
-			case uq := <-ut.queries:
-				uq.res <- table[uq.id]
-				close(uq.res)
-			}
-		}
-	}()
-
-	return in
-}
-
-func (ut *userTable) Add(u *User) bool {
-	if ut.Query(u.ID) != nil {
-		return false
+func (ut *userTable) AddUser(u *User) *User {
+	if u == nil {
+		return nil
 	}
 
-	if u != nil {
-		ut.in <- u
+	lui, loaded := ut.LoadOrStore(u.ID, u)
+	lu := lui.(*User)
+	switch {
+	case lu == nil:
+		panic("userTable loaded nil *User.")
+	case loaded && u != lu:
+		u.Release()
+		u = lu
 	}
 
-	return true
+	return u
 }
 
 func (ut *userTable) Query(id uint32) *User {
-	res := make(chan *User, 2)
-	ut.queries <- userQuery{id, res}
-	return <-res
+	u, ok := ut.Load(id)
+	if !ok {
+		return nil
+	}
+	return u.(*User)
 }
