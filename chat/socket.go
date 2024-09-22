@@ -341,21 +341,24 @@ func (s *sock) router(ctx context.Context) {
 func (s *sock) Start(ctx context.Context) {
 	var wg sync.WaitGroup
 
-	wg.Add(3)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	context.AfterFunc(ctx, func() {
+		s.Stop()
+	})
+
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		s.msgReader(ctx)
 	}()
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		s.router(ctx)
 	}()
-	stopf := context.AfterFunc(ctx, func() {
-		defer wg.Done()
-		s.Stop()
-	})
-	defer stopf()
-
 	wg.Wait()
 }
 

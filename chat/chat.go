@@ -4,22 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"y-a-t-s/sockchat/config"
 
 	"github.com/gen2brain/beeep"
 )
 
-type client struct {
-	ID       int
-	Username string
-}
-
 type Chat struct {
 	*sock
 
-	Cfg    config.Config
-	Client *client
+	Cfg config.Config
 
 	Users *userTable
 	pool  *ChatPool
@@ -39,10 +34,9 @@ func NewChat(ctx context.Context, cfg config.Config) (*Chat, error) {
 	return &Chat{
 		sock: s,
 		Cfg:  cfg,
-		Client: &client{
-			ID: cfg.UserID,
+		Users: &userTable{
+			ClientID: uint32(cfg.UserID),
 		},
-		Users:    &userTable{},
 		pool:     newChatPool(),
 		History:  make(chan chan *Message, 4),
 		Messages: make(chan *Message, cap(s.messages)),
@@ -129,24 +123,25 @@ func (c *Chat) router(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	var wg sync.WaitGroup
+
 	histFeed := make(chan *Message, HIST_LEN)
 	defer close(histFeed)
-
 	hist := c.recordHistory(histFeed)
 
 	if c.Cfg.Logger {
 		logFeed := c.Feeder.NewFeed()
-		defer logFeed.Close()
+		wg.Add(1)
+		context.AfterFunc(ctx, func() {
+			defer wg.Done()
+			logFeed.Close()
+		})
 
 		err := startLogger(logFeed.Feed)
 		if err != nil {
 			panic(err)
 		}
 
-		stopf := context.AfterFunc(ctx, func() {
-			logFeed.Close()
-		})
-		defer stopf()
 	}
 
 	msgHandler := func(msg *Message) {
@@ -154,7 +149,7 @@ func (c *Chat) router(ctx context.Context) {
 			return
 		}
 
-		if c.Client.Username != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s,", c.Client.Username)) {
+		if c.Users.ClientName != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s,", c.Users.ClientName)) {
 			msg.IsMention = true
 			beeep.Notify("New mention", msg.MessageRaw, "")
 		}
@@ -190,6 +185,7 @@ func (c *Chat) router(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			cancel()
+			wg.Wait()
 			return
 		case hf := <-hist:
 			c.History <- hf

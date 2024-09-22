@@ -8,7 +8,6 @@ import (
 type feed struct {
 	Feed   chan Message
 	closed chan struct{}
-	once   sync.Once
 }
 
 func newFeed() *feed {
@@ -21,6 +20,7 @@ func newFeed() *feed {
 func (mc *feed) send(msg *Message) {
 	select {
 	case <-mc.closed:
+		return
 	default:
 		// Not defined as a case to make sure mc.closed is checked first.
 		mc.Feed <- *msg
@@ -29,17 +29,20 @@ func (mc *feed) send(msg *Message) {
 }
 
 func (mf *feed) Close() {
-	mf.once.Do(func() {
+	select {
+	case <-mf.closed:
+		return
+	default:
 		close(mf.closed)
 		close(mf.Feed)
-	})
+	}
 }
 
 type Feeder struct {
 	feeds []*feed
 	in    chan<- *Message
 
-	mx   sync.Mutex
+	mx   sync.RWMutex
 	once sync.Once
 }
 
@@ -71,8 +74,8 @@ func NewFeeder(ctx context.Context) *Feeder {
 			return
 		}
 
-		fdr.mx.Lock()
-		defer fdr.mx.Unlock()
+		fdr.mx.RLock()
+		defer fdr.mx.RUnlock()
 
 		for i, mf := range fdr.feeds {
 			select {

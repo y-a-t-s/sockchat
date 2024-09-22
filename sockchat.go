@@ -78,17 +78,13 @@ func main() {
 	}
 
 	wg.Add(1)
-	context.AfterFunc(ctx, func() {
-		defer wg.Done()
-		cfg.Cookies = c.Cfg.Cookies
-		cfg.Save()
-	})
-
-	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer cancel()
 		c.Start(ctx)
+
+		cfg.Cookies = c.Cfg.Cookies
+		cfg.Save()
 	}()
 
 	wg.Add(1)
@@ -98,4 +94,5 @@ func main() {
 		services.StartTUI(ctx, c)
 	}()
 	wg.Wait()
+	cancel()
 }

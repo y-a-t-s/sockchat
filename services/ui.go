@@ -128,14 +128,10 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 	var (
 		bb         bytes.Buffer // Buffer for quick chat history rewrites.
 		mentionIDs []string     // IDs of msgs that mention the user. Used for highlighting.
-		mre        *regexp.Regexp
 
 		prevID uint32 = 0
 	)
 
-	ui.QueueUpdate(func() {
-		ui.Console.Highlight(mentionIDs...)
-	})
 	ui.Console.SetChangedFunc(func() {
 		ui.Draw()
 	})
@@ -179,6 +175,12 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			msg.Author.String(fl), msg.MessageID, processTags(msg.MessageRaw))
 	}
 
+	highlight := func() {
+		ui.QueueUpdateDraw(func() {
+			ui.Console.Highlight(mentionIDs...)
+		})
+	}
+
 	// Chat msg feed from socket.
 	feed := ui.Chat.Feeder.NewFeed()
 	defer feed.Close()
@@ -211,18 +213,17 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			ui.Console.Clear()
 			bb.WriteTo(ui.Console)
 			bb.Reset()
+			go highlight()
 		case msg := <-feed.Feed:
 			if msg.IsEdited() && msg.MessageID <= prevID {
 				continue
 			}
 
 			io.WriteString(ui.Console, msgStr(&msg))
-			if un := ui.Chat.Client.Username; mre == nil && un != "" {
-				mre = regexp.MustCompile(fmt.Sprintf("@%s,", un))
+			if msg.IsMention {
+				mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
+				go highlight()
 			}
-			// if mre != nil && mre.MatchString(msg.MessageRaw) {
-			// mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-			// }
 
 			prevID = msg.MessageID
 		}

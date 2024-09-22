@@ -69,11 +69,17 @@ func (u *User) String(fl string) string {
 
 type userTable struct {
 	sync.Map
+	ClientID   uint32
+	ClientName string
 }
 
 func (ut *userTable) AddUser(u *User) *User {
 	if u == nil {
 		return nil
+	}
+
+	if ut.ClientName == "" && ut.ClientID == u.ID {
+		ut.ClientName = u.Username
 	}
 
 	lui, loaded := ut.LoadOrStore(u.ID, u)
