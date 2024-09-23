@@ -2,16 +2,19 @@ package chat
 
 import (
 	"context"
-	"sync"
 )
+
+func newFeedChan() chan *Message {
+	return make(chan *Message, HIST_LEN)
+}
 
 type feed struct {
 	Feed   chan Message
 	closed chan struct{}
 }
 
-func newFeed() *feed {
-	return &feed{
+func newFeed() feed {
+	return feed{
 		Feed:   make(chan Message, HIST_LEN),
 		closed: make(chan struct{}, 1),
 	}
@@ -39,34 +42,24 @@ func (mf *feed) Close() {
 }
 
 type Feeder struct {
-	feeds []*feed
-	in    chan<- *Message
+	in chan<- *Message
 
-	mx   sync.RWMutex
-	once sync.Once
+	Feed func() feed
 }
 
 func NewFeeder(ctx context.Context) *Feeder {
-	in := make(chan *Message, 512)
+	in := newFeedChan()
+
+	feeds := make([]feed, 0, 4)
+	newFeeds := make(chan feed)
+
 	fdr := &Feeder{
-		feeds: make([]*feed, 0, 4),
-		in:    in,
-	}
-
-	dropFeed := func(i int) {
-		fdr.mx.Lock()
-		defer fdr.mx.Unlock()
-
-		fl := len(fdr.feeds) - 1
-		if i > fl {
-			return
-		}
-
-		fdr.feeds[i].Close()
-		if i < fl {
-			fdr.feeds[i] = fdr.feeds[fl]
-		}
-		fdr.feeds = fdr.feeds[:fl-1]
+		in: in,
+		Feed: func() feed {
+			mf := newFeed()
+			newFeeds <- mf
+			return mf
+		},
 	}
 
 	castMsg := func(msg *Message) {
@@ -74,15 +67,17 @@ func NewFeeder(ctx context.Context) *Feeder {
 			return
 		}
 
-		fdr.mx.RLock()
-		defer fdr.mx.RUnlock()
-
-		for i, mf := range fdr.feeds {
+		for i := range feeds {
 			select {
-			case <-mf.closed:
-				go dropFeed(i)
+			case <-feeds[i].closed:
+				// See if the closed feed can be replaced now.
+				select {
+				case feeds[i] = <-newFeeds:
+					feeds[i].send(msg)
+				default:
+				}
 			default:
-				mf.send(msg)
+				feeds[i].send(msg)
 			}
 		}
 	}
@@ -92,6 +87,8 @@ func NewFeeder(ctx context.Context) *Feeder {
 			select {
 			case <-ctx.Done():
 				return
+			case mf := <-newFeeds:
+				feeds = append(feeds, mf)
 			case msg := <-in:
 				castMsg(msg)
 			}
@@ -99,19 +96,6 @@ func NewFeeder(ctx context.Context) *Feeder {
 	}()
 
 	return fdr
-}
-
-func (fdr *Feeder) NewFeed() *feed {
-	mf := newFeed()
-
-	go func() {
-		fdr.mx.Lock()
-		defer fdr.mx.Unlock()
-
-		fdr.feeds = append(fdr.feeds, mf)
-	}()
-
-	return mf
 }
 
 func (fdr *Feeder) Send(msg *Message) {

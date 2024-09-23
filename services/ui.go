@@ -182,7 +182,7 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 	}
 
 	// Chat msg feed from socket.
-	feed := ui.Chat.Feeder.NewFeed()
+	feed := ui.Chat.Feeder.Feed()
 	defer feed.Close()
 
 	for {
@@ -211,9 +211,10 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			}
 
 			ui.Console.Clear()
+			ui.Console.ScrollToEnd()
 			bb.WriteTo(ui.Console)
 			bb.Reset()
-			go highlight()
+			highlight()
 		case msg := <-feed.Feed:
 			if msg.IsEdited() && msg.MessageID <= prevID {
 				continue
@@ -222,7 +223,7 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			io.WriteString(ui.Console, msgStr(&msg))
 			if msg.IsMention {
 				mentionIDs = append(mentionIDs, fmt.Sprint(msg.MessageID))
-				go highlight()
+				highlight()
 			}
 
 			prevID = msg.MessageID

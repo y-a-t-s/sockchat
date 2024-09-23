@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"y-a-t-s/sockchat/config"
 
@@ -58,26 +57,16 @@ func (c *Chat) Stop() {
 	c.Cfg = c.sock.cfg
 }
 
-func newHistChan() chan *Message {
-	return make(chan *Message, HIST_LEN)
-}
-
 func (c *Chat) recordHistory(feed <-chan *Message) chan chan *Message {
-	out := make(chan chan *Message, 2)
+	out := make(chan chan *Message, 4)
 
-	var (
-		prevID uint32 = 0 // ID of previously processed msg.
+	var prevID uint32 = 0 // ID of previously processed msg.
 
-		// Length tracker.
-		// Once we reach the max, the oldest msgs get popped off the feed.
-		hl   = 0
-		hist = newHistChan()
-	)
-
+	hist := newFeedChan()
 	editHist := func(msg *Message) {
 		close(hist)
 
-		hc, nc := newHistChan(), newHistChan()
+		hc, nc := newFeedChan(), newFeedChan()
 		for hm := range hist {
 			if msg.MessageID == hm.MessageID {
 				hm.Release()
@@ -104,14 +93,14 @@ func (c *Chat) recordHistory(feed <-chan *Message) chan chan *Message {
 			case msg.IsEdited() && msg.MessageID <= prevID:
 				editHist(msg)
 			default:
-				switch {
-				case hl >= HIST_LEN:
+				select {
+				case hist <- msg:
+				default:
 					hm := <-hist
 					hm.Release()
 					hist <- msg
-				default:
-					hl++
 				}
+				prevID = msg.MessageID
 			}
 		}
 	}()
@@ -123,17 +112,13 @@ func (c *Chat) router(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var wg sync.WaitGroup
-
 	histFeed := make(chan *Message, HIST_LEN)
 	defer close(histFeed)
 	hist := c.recordHistory(histFeed)
 
 	if c.Cfg.Logger {
-		logFeed := c.Feeder.NewFeed()
-		wg.Add(1)
+		logFeed := c.Feeder.Feed()
 		context.AfterFunc(ctx, func() {
-			defer wg.Done()
 			logFeed.Close()
 		})
 
@@ -185,7 +170,6 @@ func (c *Chat) router(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			cancel()
-			wg.Wait()
 			return
 		case hf := <-hist:
 			c.History <- hf
