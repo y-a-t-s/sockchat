@@ -28,46 +28,19 @@ const (
 	USER_AGENT = "Mozilla/5.0 (Windows NT 6.1; rv:60.0) Gecko/20100101 Firefox/60.0"
 )
 
-type sockIO struct {
+type sock struct {
+	*websocket.Conn
+
+	Users *userTable
+	pool  *ChatPool
+
 	debug   chan string
 	errLog  chan error
 	infoLog chan string
 
 	chatJson chan []byte
 	messages chan *Message
-	users    chan *User
 	Out      chan string
-
-	once sync.Once
-}
-
-func newSockIO() *sockIO {
-	return &sockIO{
-		debug:    make(chan string, 16),
-		errLog:   make(chan error, 8),
-		infoLog:  make(chan string, 64),
-		chatJson: make(chan []byte, 64),
-		messages: make(chan *Message, HIST_LEN),
-		users:    make(chan *User, 256),
-		Out:      make(chan string, 16),
-	}
-}
-
-func (sio *sockIO) CloseAll() {
-	sio.once.Do(func() {
-		// close(sio.errLog)
-		// close(sio.infoLog)
-		close(sio.debug)
-		close(sio.chatJson)
-		close(sio.messages)
-		close(sio.users)
-		close(sio.Out)
-	})
-}
-
-type sock struct {
-	*websocket.Conn
-	*sockIO
 
 	proxy *socksProxy
 	url   *url.URL
@@ -95,8 +68,19 @@ func parseHost(addr string) (*url.URL, error) {
 
 func newSocket(ctx context.Context, cfg config.Config) (*sock, error) {
 	s := &sock{
-		sockIO: newSockIO(),
-		cfg:    cfg,
+		cfg: cfg,
+
+		Users: &userTable{
+			ClientID: uint32(cfg.UserID),
+		},
+		pool: newChatPool(),
+
+		debug:    make(chan string, 16),
+		errLog:   make(chan error, 8),
+		infoLog:  make(chan string, 64),
+		chatJson: make(chan []byte, 64),
+		messages: make(chan *Message, HIST_LEN),
+		Out:      make(chan string, 16),
 	}
 
 	err := s.setUrl(cfg.Host, uint16(cfg.Port))
@@ -344,10 +328,6 @@ func (s *sock) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	context.AfterFunc(ctx, func() {
-		s.Stop()
-	})
-
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
@@ -358,6 +338,7 @@ func (s *sock) Start(ctx context.Context) {
 		defer wg.Done()
 		defer cancel()
 		s.router(ctx)
+		s.Stop()
 	}()
 	wg.Wait()
 }

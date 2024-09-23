@@ -197,12 +197,9 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			n := 0
 			mentionIDs = make([]string, 0, len(mentionIDs))
 			for msg := range hc {
-				if msg == nil {
-					continue
-				}
 				id := msg.MessageID
 
-				bb.WriteString(msgStr(msg))
+				bb.WriteString(msgStr(&msg))
 				n++
 
 				if msg.IsMention {
