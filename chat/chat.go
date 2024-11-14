@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"y-a-t-s/sockchat/config"
 
@@ -13,15 +14,8 @@ import (
 type Chat struct {
 	*sock
 
-	Cfg config.Config
-
-	Users *userTable
-	pool  *ChatPool
-
-	History  chan chan *Message
-	Messages chan *Message
-
-	Feeder *Feeder
+	Feeder  feeder
+	History chan chan Message
 }
 
 func NewChat(ctx context.Context, cfg config.Config) (*Chat, error) {
@@ -30,50 +24,55 @@ func NewChat(ctx context.Context, cfg config.Config) (*Chat, error) {
 		return nil, err
 	}
 
-	return &Chat{
-		sock: s,
-		Cfg:  cfg,
-		Users: &userTable{
-			ClientID: uint32(cfg.UserID),
-		},
-		pool:     newChatPool(),
-		History:  make(chan chan *Message, 4),
-		Messages: make(chan *Message, cap(s.messages)),
-		Feeder:   NewFeeder(ctx),
-	}, nil
+	c := &Chat{
+		sock:    s,
+		History: make(chan chan Message, 1),
+		Feeder:  newFeeder(ctx),
+	}
+
+	return c, nil
 }
 
 func (c *Chat) Start(ctx context.Context) {
-	go c.parseResponse(ctx)
-	go c.sock.Start(ctx)
-	c.router(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	c.Stop()
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		defer cancel()
+		go c.parseResponse(ctx)
+		c.sock.start(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		defer cancel()
+		c.router(ctx)
+		c.stop()
+	}()
+
+	wg.Wait()
 }
 
-func (c *Chat) Stop() {
-	// Save socket's config state.
-	// Used to overwrite saved cookie string on exit.
-	c.Cfg = c.sock.cfg
-}
+func (c *Chat) recordHistory(feed <-chan *Message) chan chan Message {
+	out := make(chan chan Message, 1)
 
-func (c *Chat) recordHistory(feed <-chan *Message) chan chan *Message {
-	out := make(chan chan *Message, 4)
+	var prevID uint32 // ID of previously processed msg.
 
-	var prevID uint32 = 0 // ID of previously processed msg.
-
-	hist := newFeedChan()
+	hist := make(chan *Message, HIST_LEN)
 	editHist := func(msg *Message) {
 		close(hist)
 
-		hc, nc := newFeedChan(), newFeedChan()
+		hc, nc := make(chan Message, HIST_LEN), make(chan *Message, HIST_LEN)
 		for hm := range hist {
 			if msg.MessageID == hm.MessageID {
 				hm.Release()
 				hm = msg
 			}
 
-			hc <- hm
+			hc <- *hm
 			nc <- hm
 		}
 
@@ -87,6 +86,9 @@ func (c *Chat) recordHistory(feed <-chan *Message) chan chan *Message {
 
 		for msg := range feed {
 			switch {
+			// Better safe than sorry.
+			case msg == nil:
+				continue
 			// We need to check if the msg was edited and if it's an edit of a msg we already received.
 			// Msgs may be edited, but were edited before the client connected.
 			// Edits of existing msgs will appear with an older or same ID than the previous msg.
@@ -109,24 +111,16 @@ func (c *Chat) recordHistory(feed <-chan *Message) chan chan *Message {
 }
 
 func (c *Chat) router(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	histFeed := make(chan *Message, HIST_LEN)
 	defer close(histFeed)
 	hist := c.recordHistory(histFeed)
 
 	if c.Cfg.Logger {
 		logFeed := c.Feeder.Feed()
-		context.AfterFunc(ctx, func() {
-			logFeed.Close()
-		})
-
 		err := startLogger(logFeed.Feed)
 		if err != nil {
 			panic(err)
 		}
-
 	}
 
 	msgHandler := func(msg *Message) {
@@ -148,19 +142,10 @@ func (c *Chat) router(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-				// case e, ok := <-c.sock.errLog:
-				// if !ok {
-				// return
-				// }
-			case dms, ok := <-c.sock.debug:
-				if !ok {
-					return
-				}
+			// case e := <-c.sock.errLog:
+			case dms := <-c.sock.debug:
 				c.ClientMsg(dms, true)
-			case ms, ok := <-c.sock.infoLog:
-				if !ok {
-					return
-				}
+			case ms := <-c.sock.infoLog:
 				c.ClientMsg(ms, false)
 			}
 		}
@@ -169,10 +154,10 @@ func (c *Chat) router(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			cancel()
 			return
-		case hf := <-hist:
-			c.History <- hf
+		// Not directly assigned to help sync with new msgs.
+		case hc := <-hist:
+			c.History <- hc
 		case msg := <-c.sock.messages:
 			if msg != nil {
 				msgHandler(msg)

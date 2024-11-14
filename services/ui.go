@@ -100,6 +100,10 @@ func (ui *TUI) newInputBox() *tview.InputField {
 		switch key {
 		case tcell.KeyEnter:
 			msg := strings.TrimSpace(ib.GetText())
+			if msg == "" {
+				return
+			}
+
 			// Add outgoing message to queue.
 			ui.Chat.Out <- msg
 			ib.SetText("")
@@ -197,12 +201,9 @@ func (ui *TUI) incomingHandler(ctx context.Context) {
 			n := 0
 			mentionIDs = make([]string, 0, len(mentionIDs))
 			for msg := range hc {
-				if msg == nil {
-					continue
-				}
 				id := msg.MessageID
 
-				bb.WriteString(msgStr(msg))
+				bb.WriteString(msgStr(&msg))
 				n++
 
 				if msg.IsMention {

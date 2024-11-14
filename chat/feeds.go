@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"sync"
 )
 
 func newFeedChan() chan *Message {
@@ -9,8 +10,10 @@ func newFeedChan() chan *Message {
 }
 
 type feed struct {
-	Feed   chan Message
+	// Signals closed feed. Similar to ctx.Done()
 	closed chan struct{}
+
+	Feed chan Message
 }
 
 func newFeed() feed {
@@ -23,12 +26,10 @@ func newFeed() feed {
 func (mc *feed) send(msg *Message) {
 	select {
 	case <-mc.closed:
-		return
 	default:
 		// Not defined as a case to make sure mc.closed is checked first.
 		mc.Feed <- *msg
 	}
-
 }
 
 func (mf *feed) Close() {
@@ -41,56 +42,74 @@ func (mf *feed) Close() {
 	}
 }
 
-type Feeder struct {
-	in chan<- *Message
+type feeder struct {
+	in chan *Message
 
 	Feed func() feed
 }
 
-func NewFeeder(ctx context.Context) *Feeder {
-	in := newFeedChan()
-
+func newFeeder(ctx context.Context) feeder {
 	feeds := make([]feed, 0, 4)
 	newFeeds := make(chan feed)
+	closed := make(chan feed, 4)
 
-	fdr := &Feeder{
-		in: in,
+	fdr := feeder{
+		in: newFeedChan(),
 		Feed: func() feed {
 			mf := newFeed()
-			newFeeds <- mf
+
+			// See if a previously closed feed can be replaced in the slice.
+			select {
+			case cmf := <-closed:
+				// chans are passed by ref, so this is probably ok.
+				cmf.Feed = mf.Feed
+				cmf.closed = mf.closed
+			default:
+				newFeeds <- mf
+			}
+
 			return mf
 		},
 	}
 
-	castMsg := func(msg *Message) {
+	broadcast := func(msg *Message) {
 		if msg == nil {
 			return
 		}
 
-		for i := range feeds {
+		for _, mf := range feeds {
 			select {
-			case <-feeds[i].closed:
-				// See if the closed feed can be replaced now.
+			case <-mf.closed:
 				select {
-				case feeds[i] = <-newFeeds:
-					feeds[i].send(msg)
+				case closed <- mf:
 				default:
 				}
 			default:
-				feeds[i].send(msg)
+				mf.send(msg)
 			}
 		}
 	}
 
+	closeAll := sync.OnceFunc(func() {
+		for _, mf := range feeds {
+			mf.Close()
+		}
+	})
+
 	go func() {
+		defer closeAll()
 		for {
 			select {
 			case <-ctx.Done():
+				closeAll()
 				return
 			case mf := <-newFeeds:
 				feeds = append(feeds, mf)
-			case msg := <-in:
-				castMsg(msg)
+			case msg, ok := <-fdr.in:
+				if !ok {
+					return
+				}
+				broadcast(msg)
 			}
 		}
 	}()
@@ -98,6 +117,6 @@ func NewFeeder(ctx context.Context) *Feeder {
 	return fdr
 }
 
-func (fdr *Feeder) Send(msg *Message) {
+func (fdr *feeder) Send(msg *Message) {
 	fdr.in <- msg
 }
