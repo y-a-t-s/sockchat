@@ -14,38 +14,21 @@ import (
 type Chat struct {
 	*sock
 
-	Cfg config.Config
-
-	History  chan chan Message
-	Messages chan *Message
-
-	Feeder feeder
-
-	Stop func()
+	Feeder  feeder
+	History chan chan Message
 }
 
 func NewChat(ctx context.Context, cfg config.Config) (*Chat, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
 	s, err := newSocket(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &Chat{
-		sock:     s,
-		Cfg:      cfg,
-		History:  make(chan chan Message, 1),
-		Messages: make(chan *Message, cap(s.messages)),
-		Feeder:   newFeeder(ctx),
+		sock:    s,
+		History: make(chan chan Message, 1),
+		Feeder:  newFeeder(ctx),
 	}
-
-	c.Stop = sync.OnceFunc(func() {
-		cancel()
-		// Save socket's config state.
-		// Used to overwrite saved cookie string on exit.
-		c.Cfg = c.sock.cfg
-	})
 
 	return c, nil
 }
@@ -61,12 +44,13 @@ func (c *Chat) Start(ctx context.Context) {
 		defer wg.Done()
 		defer cancel()
 		go c.parseResponse(ctx)
-		c.sock.Start(ctx)
+		c.sock.start(ctx)
 	}()
 	go func() {
 		defer wg.Done()
 		defer cancel()
 		c.router(ctx)
+		c.stop()
 	}()
 
 	wg.Wait()
@@ -75,7 +59,7 @@ func (c *Chat) Start(ctx context.Context) {
 func (c *Chat) recordHistory(feed <-chan *Message) chan chan Message {
 	out := make(chan chan Message, 1)
 
-	var prevID uint32 = 0 // ID of previously processed msg.
+	var prevID uint32 // ID of previously processed msg.
 
 	hist := make(chan *Message, HIST_LEN)
 	editHist := func(msg *Message) {
@@ -170,7 +154,6 @@ func (c *Chat) router(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.Stop()
 			return
 		// Not directly assigned to help sync with new msgs.
 		case hc := <-hist:

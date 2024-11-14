@@ -45,7 +45,7 @@ type sock struct {
 	proxy *socksProxy
 	url   *url.URL
 
-	cfg config.Config
+	Cfg config.Config
 	kf  *libkiwi.KF
 }
 
@@ -68,19 +68,19 @@ func parseHost(addr string) (*url.URL, error) {
 
 func newSocket(ctx context.Context, cfg config.Config) (*sock, error) {
 	s := &sock{
-		cfg: cfg,
+		Cfg: cfg,
 
 		Users: &userTable{
 			ClientID: uint32(cfg.UserID),
 		},
 		pool: newChatPool(),
 
-		debug:    make(chan string, 16),
+		debug:    make(chan string, 8),
 		errLog:   make(chan error, 8),
-		infoLog:  make(chan string, 64),
+		infoLog:  make(chan string, 8),
 		chatJson: make(chan []byte, 64),
 		messages: make(chan *Message, HIST_LEN),
-		Out:      make(chan string, 16),
+		Out:      make(chan string, 8),
 	}
 
 	err := s.setUrl(cfg.Host, uint16(cfg.Port))
@@ -157,7 +157,7 @@ func (s *sock) connect(ctx context.Context) error {
 	// defined up here to make the redundant slice warning fuck off.
 	var (
 		ua      = []string{USER_AGENT}
-		cookies = []string{s.cfg.Cookies}
+		cookies = []string{s.Cfg.Cookies}
 	)
 
 	// Create new WebSocket dialer, routing through any applicable proxies.
@@ -182,7 +182,7 @@ func (s *sock) connect(ctx context.Context) error {
 	s.Conn = conn
 
 	// Send /join message for desired room.
-	s.Out <- fmt.Sprintf("/join %d", s.cfg.Room)
+	s.Out <- fmt.Sprintf("/join %d", s.Cfg.Room)
 	s.infoLog <- "Connected."
 
 	return nil
@@ -265,8 +265,8 @@ func (s *sock) msgReader(ctx context.Context) {
 			if err != nil {
 				panic(err)
 			}
-			s.cfg.Cookies = s.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
-			s.connect(ctx)
+			s.Cfg.Cookies = s.kf.Client.Jar.(*libkiwi.KiwiJar).CookieString(host)
+			s.reconnect(ctx)
 		default:
 			s.infoLog <- ms
 		}
@@ -277,6 +277,7 @@ func (s *sock) msgReader(ctx context.Context) {
 func (s *sock) router(ctx context.Context) {
 	// Join msg regex.
 	joinRE := regexp.MustCompile(`^/join \d+`)
+	greenRE := regexp.MustCompile(`^>\w`)
 
 	cmdHandler := func(cs string) {
 		switch cmd := strings.SplitN(cs, " ", 3); cmd[0] {
@@ -289,7 +290,7 @@ func (s *sock) router(ctx context.Context) {
 		case "!q", "!quit":
 			return
 		case "!reconnect":
-			s.disconnect()
+			s.reconnect(ctx)
 		}
 	}
 
@@ -300,17 +301,20 @@ func (s *sock) router(ctx context.Context) {
 		case m := <-s.Out:
 			isJoin := joinRE.MatchString(m)
 			switch {
-			case s.cfg.ReadOnly && !isJoin:
+			case m == "", s.Cfg.ReadOnly && !isJoin:
 				continue
 			case m[0] == '!':
 				cmdHandler(m)
 			default:
-				if isJoin {
+				switch {
+				case isJoin:
 					room, err := strconv.Atoi(strings.Split(m, " ")[1])
 					if err != nil {
 						s.errLog <- err
 					}
-					s.cfg.Room = uint(room)
+					s.Cfg.Room = uint(room)
+				case greenRE.MatchString(m):
+					m = "[color=green]" + m
 				}
 
 				err := s.write(m)
@@ -322,7 +326,7 @@ func (s *sock) router(ctx context.Context) {
 	}
 }
 
-func (s *sock) Start(ctx context.Context) {
+func (s *sock) start(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -338,12 +342,12 @@ func (s *sock) Start(ctx context.Context) {
 		defer wg.Done()
 		defer cancel()
 		s.router(ctx)
-		s.Stop()
+		s.stop()
 	}()
 	wg.Wait()
 }
 
-func (s *sock) Stop() {
+func (s *sock) stop() {
 	s.disconnect()
 	if s.proxy != nil {
 		s.proxy.stopTor()
