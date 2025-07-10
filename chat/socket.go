@@ -279,21 +279,6 @@ func (s *sock) router(ctx context.Context) {
 	joinRE := regexp.MustCompile(`^/join \d+`)
 	greenRE := regexp.MustCompile(`^>\w`)
 
-	cmdHandler := func(cs string) {
-		switch cmd := strings.SplitN(cs, " ", 3); cmd[0] {
-		case "!debug":
-			// Various debugging tools.
-			switch cmd[1] {
-			case "msg":
-				s.debug <- cmd[2]
-			}
-		case "!q", "!quit":
-			return
-		case "!reconnect":
-			s.reconnect(ctx)
-		}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -303,8 +288,6 @@ func (s *sock) router(ctx context.Context) {
 			switch {
 			case m == "", s.Cfg.ReadOnly && !isJoin:
 				continue
-			case m[0] == '!':
-				cmdHandler(m)
 			default:
 				switch {
 				case isJoin:
