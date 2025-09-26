@@ -24,9 +24,7 @@ type Config struct {
 	Proxy proxyConfig `json:"proxy"`
 	Tor   torConfig   `json:"tor"`
 
-	// ApiMode bool `json:"-"`
-
-	// Used for collecting remaining args, containing cookies.
+	// Used for collecting remaining args.
 	Args []string `json:",omitempty"`
 	mx   *sync.Mutex
 }
@@ -135,9 +133,9 @@ func newConfig() Config {
 }
 
 func (cfg *Config) UnmarshalJSON(b []byte) error {
-	var cm map[string]interface{}
+	var cm map[string]any
 
-	parseProxyCfg := func(m map[string]interface{}) {
+	parseProxyCfg := func(m map[string]any) {
 		for k, v := range m {
 			switch k {
 			case "enabled":
@@ -152,7 +150,7 @@ func (cfg *Config) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	parseTorCfg := func(m map[string]interface{}) {
+	parseTorCfg := func(m map[string]any) {
 		for k, v := range m {
 			switch k {
 			case "enabled":
@@ -187,16 +185,16 @@ func (cfg *Config) UnmarshalJSON(b []byte) error {
 		case "user_id":
 			cfg.UserID = int(v.(float64))
 		case "proxy":
-			parseProxyCfg(v.(map[string]interface{}))
+			parseProxyCfg(v.(map[string]any))
 		case "tor":
-			switch v.(type) {
+			switch v := v.(type) {
 			// Migrate deprecated config value.
 			// Will eventually be removed in future versions.
 			case bool:
 				cfg.Tor = newTorConfig()
-				cfg.Tor.Enabled = v.(bool)
-			case map[string]interface{}:
-				parseTorCfg(v.(map[string]interface{}))
+				cfg.Tor.Enabled = v
+			case map[string]any:
+				parseTorCfg(v)
 			}
 		}
 	}

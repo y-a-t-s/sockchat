@@ -123,14 +123,32 @@ func (c *Chat) router(ctx context.Context) {
 		}
 	}
 
+	type reply struct {
+		ID   uint32
+		Date int64
+	}
+
+	var prev reply
+
 	msgHandler := func(msg *Message) {
 		if msg == nil {
 			return
 		}
 
-		if c.Users.ClientName != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s,", c.Users.ClientName)) {
+		if c.Users.ClientName != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s", c.Users.ClientName)) {
 			msg.IsMention = true
-			beeep.Notify("New mention", msg.MessageRaw, "")
+
+			date := msg.MessageDate
+			if msg.MessageEditDate > 0 {
+				date = msg.MessageEditDate
+			}
+
+			if date >= prev.Date && msg.MessageID != prev.ID {
+				prev.ID = msg.MessageID
+				prev.Date = date
+
+				beeep.Notify(fmt.Sprintf("Reply from @%s", msg.Author.Username), msg.MessageRaw, "")
+			}
 		}
 
 		c.Feeder.Send(msg)
