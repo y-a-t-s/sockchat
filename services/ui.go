@@ -16,6 +16,8 @@ import (
 	"github.com/rivo/tview"
 )
 
+const HISTORY_LEN uint8 = 4
+
 type TUI struct {
 	*tview.Application
 
@@ -55,13 +57,18 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 			ui.SetFocus(ui.flex)
 		case tcell.KeyCtrlC:
 			ui.Stop()
+		case tcell.KeyPgDn:
+			err := ui.Chat.Reconnect(ctx)
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 
 	ui.flex.AddItem(ui.Console, 0, 1, false)
 	// Don't enable msg input box in RO mode.
 	if !c.Cfg.ReadOnly {
-		ui.inputBox = ui.newInputBox()
+		ui.inputBox = ui.newInputBox(ctx)
 		ui.flex.AddItem(ui.inputBox, 1, 1, true)
 	}
 
@@ -71,7 +78,7 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 	ui.Run()
 }
 
-func (ui *TUI) newInputBox() *tview.InputField {
+func (ui *TUI) newInputBox(ctx context.Context) *tview.InputField {
 	ib := tview.NewInputField().
 		// Idk what the site caps it at.
 		SetAcceptanceFunc(tview.InputFieldMaxLength(2048)).
@@ -84,8 +91,8 @@ func (ui *TUI) newInputBox() *tview.InputField {
 		return regexp.MustCompile(`@(\d+)`).ReplaceAllStringFunc(msg, func(m string) string {
 			id, err := strconv.Atoi(m[1:])
 			if err != nil {
-				// TODO: Better handling.
-				return ""
+				ui.Chat.Errs <- err
+				return m
 			}
 
 			if u := ui.Chat.Users.Query(uint32(id)); u != nil {
@@ -96,6 +103,27 @@ func (ui *TUI) newInputBox() *tview.InputField {
 		})
 	}
 
+	var History struct {
+		hist []string
+		Add  func(msg string) bool
+	}
+	History.hist = make([]string, 0, HISTORY_LEN)
+	// TODO: Probably turn this into an error return type with some custom error.
+	History.Add = func(msg string) bool {
+		if msg == "" {
+			return false
+		}
+
+		History.hist = append(History.hist, msg)
+		if len(History.hist) > int(HISTORY_LEN) {
+			// Pop oldest msg from slice.
+			History.hist = History.hist[1:]
+		}
+
+		return true
+	}
+
+	var histIdx uint8
 	ib.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
@@ -107,9 +135,8 @@ func (ui *TUI) newInputBox() *tview.InputField {
 			// Add outgoing message to queue.
 			ui.Chat.Out <- msg
 			ib.SetText("")
-		case tcell.KeyTab:
-			msg := ib.GetText()
-			ib.SetText(tabHandler(msg))
+
+			History.Add(msg)
 		case tcell.KeyBacktab:
 			if ui.Console == nil || ui.flex == nil {
 				return
@@ -119,6 +146,30 @@ func (ui *TUI) newInputBox() *tview.InputField {
 			ui.SetFocus(ui.Console)
 		case tcell.KeyCtrlC:
 			ui.Stop()
+		case tcell.KeyPgDn:
+			err := ui.Chat.Reconnect(ctx)
+			if err != nil {
+				panic(err)
+			}
+		case tcell.KeyTab:
+			msg := ib.GetText()
+			ib.SetText(tabHandler(msg))
+		case tcell.KeyUp:
+			hl := len(History.hist)
+			if int(histIdx) > hl {
+				return
+			}
+
+			ib.SetText(History.hist[hl-int(histIdx)])
+			histIdx++
+		case tcell.KeyDown:
+			if histIdx == 0 {
+				return
+			}
+
+			ib.SetText(History.hist[histIdx])
+			ib.SetText(History.hist[len(History.hist)-int(histIdx)])
+			histIdx--
 		}
 	})
 

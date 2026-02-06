@@ -51,7 +51,7 @@ type proxyConfig struct {
 }
 
 func openConfig() (*os.File, error) {
-	cfgDir, err := configDir()
+	cfgDir, err := ConfigDir()
 	if err != nil {
 		return nil, err
 	}
@@ -63,18 +63,18 @@ func openConfig() (*os.File, error) {
 // Load user config from config.json file in the UserConfigDir provided by the os package.
 // Creates the file and fills it with defaults from newConfig if it isn't found.
 // Adds missing option keys, if any, with defaults to file.
-func LoadConfig() (cfg Config, err error) {
+func LoadConfig() (Config, error) {
 	// Generate Config from template.
 	// JSON decode will set any existing values.
 	// New keys get set to defaults and saved.
-	cfg = newConfig()
+	cfg := NewConfig()
 
 	cfg.mx.Lock()
 	defer cfg.mx.Unlock()
 
 	f, err := openConfig()
 	if err != nil {
-		return
+		return cfg, err
 	}
 	defer f.Close()
 
@@ -82,18 +82,18 @@ func LoadConfig() (cfg Config, err error) {
 	jd := json.NewDecoder(f)
 	for jd.More() {
 		if err = jd.Decode(&cfg); err != nil {
-			return
+			return cfg, err
 		}
 	}
 
 	// Truncate and write loaded config with any potential new keys.
 	go cfg.writeConfig(f)
 
-	return
+	return cfg, nil
 }
 
 // Get path string of user config dir.
-func configDir() (string, error) {
+func ConfigDir() (string, error) {
 	ucd, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -111,7 +111,7 @@ func configDir() (string, error) {
 }
 
 // Generate new Config from template.
-func newConfig() Config {
+func NewConfig() Config {
 	return Config{
 		Cookies:  "",
 		Host:     "kiwifarms.st",
@@ -134,6 +134,11 @@ func newConfig() Config {
 
 func (cfg *Config) UnmarshalJSON(b []byte) error {
 	var cm map[string]any
+
+	err := json.Unmarshal(b, &cm)
+	if err != nil {
+		return err
+	}
 
 	parseProxyCfg := func(m map[string]any) {
 		for k, v := range m {
@@ -163,12 +168,7 @@ func (cfg *Config) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	err := json.Unmarshal(b, &cm)
-	if err != nil {
-		return err
-	}
-
-	for k, v := range cm {
+	setCfgValue := func(k string, v any) {
 		switch k {
 		case "cookies":
 			cfg.Cookies = v.(string)
@@ -198,6 +198,16 @@ func (cfg *Config) UnmarshalJSON(b []byte) error {
 			}
 		}
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(cm))
+	for k, v := range cm {
+		go func() {
+			defer wg.Done()
+			setCfgValue(k, v)
+		}()
+	}
+	wg.Wait()
 
 	return nil
 }

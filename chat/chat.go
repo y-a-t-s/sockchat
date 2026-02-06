@@ -2,9 +2,13 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"y-a-t-s/sockchat/config"
 
@@ -14,6 +18,7 @@ import (
 type Chat struct {
 	*sock
 
+	Errs    chan error
 	Feeder  feeder
 	History chan chan Message
 }
@@ -26,11 +31,16 @@ func NewChat(ctx context.Context, cfg config.Config) (*Chat, error) {
 
 	c := &Chat{
 		sock:    s,
+		Errs:    s.errLog,
 		History: make(chan chan Message, 1),
 		Feeder:  newFeeder(ctx),
 	}
 
 	return c, nil
+}
+
+func (c *Chat) Reconnect(ctx context.Context) error {
+	return c.sock.connect(ctx)
 }
 
 func (c *Chat) Start(ctx context.Context) {
@@ -43,7 +53,6 @@ func (c *Chat) Start(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		go c.parseResponse(ctx)
 		c.sock.start(ctx)
 	}()
 	go func() {
@@ -110,6 +119,20 @@ func (c *Chat) recordHistory(feed <-chan *Message) chan chan Message {
 	return out
 }
 
+func NewErrLog() (*os.File, error) {
+	cfgDir, err := config.ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	errLogDir := filepath.Join(cfgDir, "error_logs")
+	if err = os.Mkdir(errLogDir, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+
+	logPath := filepath.Join(errLogDir, fmt.Sprintf("%s_err.log", time.Now().Format(_DATE_FMT)))
+	return os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+}
+
 func (c *Chat) router(ctx context.Context) {
 	histFeed := make(chan *Message, HIST_LEN)
 	defer close(histFeed)
@@ -123,19 +146,17 @@ func (c *Chat) router(ctx context.Context) {
 		}
 	}
 
-	type reply struct {
+	var reply struct {
 		ID   uint32
 		Date int64
 	}
-
-	var prev reply
 
 	msgHandler := func(msg *Message) {
 		if msg == nil {
 			return
 		}
 
-		if c.Users.ClientName != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s", c.Users.ClientName)) {
+		if c.Users.ClientName() != "" && strings.Contains(msg.MessageRaw, fmt.Sprintf("@%s", c.Users.ClientName())) {
 			msg.IsMention = true
 
 			date := msg.MessageDate
@@ -143,9 +164,9 @@ func (c *Chat) router(ctx context.Context) {
 				date = msg.MessageEditDate
 			}
 
-			if date >= prev.Date && msg.MessageID != prev.ID {
-				prev.ID = msg.MessageID
-				prev.Date = date
+			if date >= reply.Date && msg.MessageID != reply.ID {
+				reply.ID = msg.MessageID
+				reply.Date = date
 
 				beeep.Notify(fmt.Sprintf("Reply from @%s", msg.Author.Username), msg.MessageRaw, "")
 			}
@@ -155,16 +176,24 @@ func (c *Chat) router(ctx context.Context) {
 		histFeed <- msg
 	}
 
+	errFile, err := NewErrLog()
+	if err != nil {
+		panic(err)
+	}
+	defer errFile.Close()
+
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			// case e := <-c.sock.errLog:
 			case dms := <-c.sock.debug:
 				c.ClientMsg(dms, true)
 			case ms := <-c.sock.infoLog:
 				c.ClientMsg(ms, false)
+			case err := <-c.sock.errLog:
+				fmt.Fprintln(os.Stderr, err)
+				fmt.Fprintln(errFile, err)
 			}
 		}
 	}()

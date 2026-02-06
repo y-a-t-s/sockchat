@@ -18,20 +18,11 @@ type User struct {
 
 func (u *User) Color() string {
 	if u.color == "" {
-		u.SetColor()
+		// Just send back something instead of risking a data race trying to set it.
+		return "green"
 	}
 
 	return u.color
-}
-
-func (u *User) Copy() *User {
-	if u.pool == nil {
-		return nil
-	}
-
-	nu := u.pool.NewUser()
-	*nu = *u
-	return nu
 }
 
 func (u *User) Release() {
@@ -57,42 +48,80 @@ func (u *User) SetColor() {
 
 func (u *User) String(fl string) string {
 	color := u.Color()
+
 	// This is kinda ugly, so I'll explain:
 	// [%s::u] is a UI style tag for the color and enabling underlining.
 	// [-] clears the set color to print the ID (the %d value).
 	// [%s] sets the color back to the user's color to print the remaining "):".
 	// [-::U] resets the color like before, while also disabling underlining to print the message.
-	//
 	// See https://github.com/rivo/tview/blob/master/doc.go for more info on style tags.
 	return fmt.Sprintf("[%s::u]%s ([-]#%d[%s])%s:[-::U]", color, strings.ReplaceAll(u.Username, "]", "[]"), u.ID, color, fl)
 }
 
+type clientUser struct {
+	ID       uint32
+	Username string
+	found    chan struct{}
+}
+
+func newClientUser(id uint32) clientUser {
+	return clientUser{
+		ID:    id,
+		found: make(chan struct{}),
+	}
+}
+
 type userTable struct {
 	sync.Map
-	ClientID   uint32
-	ClientName string
+	Client clientUser
+}
+
+// TODO: Make this value passing less stupid.
+func NewUserTable(clientID uint32) *userTable {
+	return &userTable{
+		Client: newClientUser(clientID),
+	}
+}
+
+func (ut *userTable) ClientName() string {
+	select {
+	case <-ut.Client.found:
+		return ut.Client.Username
+	default:
+		return ""
+	}
 }
 
 func (ut *userTable) AddUser(u *User) *User {
-	if u == nil {
-		return nil
+	select {
+	case <-ut.Client.found:
+	default:
+		if ut.Client.ID == u.ID {
+			ut.Client.Username = u.Username
+			close(ut.Client.found)
+		}
 	}
 
-	if ut.ClientName == "" && ut.ClientID == u.ID {
-		ut.ClientName = u.Username
-	}
+	// Ensure we don't store User sourced from pool.
+	nu := *u
+	// nu := &(*u) // TODO: See if this actually allocates a new obj.
+	nu.SetColor()
 
-	lui, loaded := ut.LoadOrStore(u.ID, u)
+	lui, loaded := ut.LoadOrStore(nu.ID, &nu)
 	lu := lui.(*User)
+
 	switch {
 	case lu == nil:
+		// If this somehow happens, there's a BIG fucking problem.
 		panic("userTable loaded nil *User.")
-	case loaded && u != lu:
-		u.Release()
-		u = lu
+	case loaded:
+		if nu != *lu {
+			ut.Store(u.ID, &nu)
+			return &nu
+		}
 	}
 
-	return u
+	return lu
 }
 
 func (ut *userTable) Query(id uint32) *User {
@@ -100,5 +129,6 @@ func (ut *userTable) Query(id uint32) *User {
 	if !ok {
 		return nil
 	}
+
 	return u.(*User)
 }

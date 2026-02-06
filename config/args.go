@@ -20,7 +20,7 @@ func (cfg *Config) ParseArgs() error {
 
 	switch {
 	case cfg.Cookies == "":
-		return errors.New("No cookies provided. Set them in the config file.")
+		return errors.New("No cookies found. Set them in the config file or pass them as an argument.")
 	case cfg.Host == "":
 		return errors.New("Hostname not defined.")
 	}

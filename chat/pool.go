@@ -44,7 +44,7 @@ func (p *ChatPool) NewUser() *User {
 	return u
 }
 
-func (p *ChatPool) Release(cd interface{}) {
+func (p *ChatPool) Release(cd any) {
 	switch cd.(type) {
 	case *Message:
 		p.msg.Put(cd)
