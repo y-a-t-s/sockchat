@@ -180,7 +180,20 @@ func (c *Chat) router(ctx context.Context) {
 	if err != nil {
 		panic(err)
 	}
-	defer errFile.Close()
+	defer func() {
+		stat, err := errFile.Stat()
+		if err != nil {
+			// Ironic, ain't it?
+			fmt.Fprintln(os.Stderr, err)
+		}
+
+		errFile.Close()
+
+		if stat.Size() == 0 {
+			os.Remove(errFile.Name())
+		}
+
+	}()
 
 	go func() {
 		for {

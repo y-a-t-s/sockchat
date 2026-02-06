@@ -16,7 +16,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-const HISTORY_LEN uint8 = 4
+const _HISTORY_LEN uint8 = 4
 
 type TUI struct {
 	*tview.Application
@@ -46,6 +46,20 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 	// Returns *tview.Box, so keep separate from assignment.
 	ui.Console.SetBorder(false)
 
+	ui.Console.SetInputCapture(func(key *tcell.EventKey) *tcell.EventKey {
+		name := key.Name()
+		switch name {
+		case "F5":
+			err := ui.Chat.Reconnect(ctx)
+			if err != nil {
+				ui.Chat.Errs <- err
+				return key
+			}
+		}
+
+		return key
+	})
+
 	ui.Console.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyBacktab:
@@ -55,13 +69,6 @@ func StartTUI(ctx context.Context, c *chat.Chat) {
 
 			ui.flex.AddItem(ui.inputBox, 1, 1, true)
 			ui.SetFocus(ui.flex)
-		case tcell.KeyCtrlC:
-			ui.Stop()
-		case tcell.KeyPgDn:
-			err := ui.Chat.Reconnect(ctx)
-			if err != nil {
-				panic(err)
-			}
 		}
 	})
 
@@ -107,7 +114,7 @@ func (ui *TUI) newInputBox(ctx context.Context) *tview.InputField {
 		hist []string
 		Add  func(msg string) bool
 	}
-	History.hist = make([]string, 0, HISTORY_LEN)
+	History.hist = make([]string, 0, _HISTORY_LEN)
 	// TODO: Probably turn this into an error return type with some custom error.
 	History.Add = func(msg string) bool {
 		if msg == "" {
@@ -115,7 +122,7 @@ func (ui *TUI) newInputBox(ctx context.Context) *tview.InputField {
 		}
 
 		History.hist = append(History.hist, msg)
-		if len(History.hist) > int(HISTORY_LEN) {
+		if len(History.hist) > int(_HISTORY_LEN) {
 			// Pop oldest msg from slice.
 			History.hist = History.hist[1:]
 		}
@@ -123,7 +130,40 @@ func (ui *TUI) newInputBox(ctx context.Context) *tview.InputField {
 		return true
 	}
 
-	var histIdx uint8
+	histIdx := 0
+	ib.SetInputCapture(func(key *tcell.EventKey) *tcell.EventKey {
+		name := key.Name()
+		switch name {
+		case "F5":
+			err := ui.Chat.Reconnect(ctx)
+			if err != nil {
+				ui.Chat.Errs <- err
+				return key
+			}
+		case "Up":
+			hl := len(History.hist) - 1
+			if histIdx > hl {
+				return key
+			}
+
+			ib.SetText(History.hist[hl-histIdx])
+			if histIdx < int(_HISTORY_LEN)-1 {
+				histIdx++
+			}
+		case "Down":
+			if histIdx == 0 {
+				ib.SetText("")
+				return key
+			}
+
+			histIdx--
+			ib.SetText(History.hist[histIdx])
+			ib.SetText(History.hist[len(History.hist)-histIdx-1])
+		}
+
+		return key
+	})
+
 	ib.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
@@ -144,32 +184,9 @@ func (ui *TUI) newInputBox(ctx context.Context) *tview.InputField {
 
 			ui.flex.RemoveItem(ib)
 			ui.SetFocus(ui.Console)
-		case tcell.KeyCtrlC:
-			ui.Stop()
-		case tcell.KeyPgDn:
-			err := ui.Chat.Reconnect(ctx)
-			if err != nil {
-				panic(err)
-			}
 		case tcell.KeyTab:
 			msg := ib.GetText()
 			ib.SetText(tabHandler(msg))
-		case tcell.KeyUp:
-			hl := len(History.hist)
-			if int(histIdx) > hl {
-				return
-			}
-
-			ib.SetText(History.hist[hl-int(histIdx)])
-			histIdx++
-		case tcell.KeyDown:
-			if histIdx == 0 {
-				return
-			}
-
-			ib.SetText(History.hist[histIdx])
-			ib.SetText(History.hist[len(History.hist)-int(histIdx)])
-			histIdx--
 		}
 	})
 
