@@ -205,7 +205,6 @@ func (c *Chat) router(ctx context.Context) {
 			case ms := <-c.sock.infoLog:
 				c.ClientMsg(ms, false)
 			case err := <-c.sock.errLog:
-				fmt.Fprintln(os.Stderr, err)
 				fmt.Fprintln(errFile, err)
 			}
 		}
